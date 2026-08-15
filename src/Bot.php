@@ -74,7 +74,7 @@ final class Bot
 
             $this->telegram->sendMessage(
                 $chatId,
-                "👋 **PU Anonymous botiga xush kelibsiz!**\n\nXabaringizni yuboring. Matnli xabarlar AI orqali tekshirilib, avtomatik kanalga joylanadi. Medialar esa moderatsiyadan o'tadi.\n\n🔒 Shaxsingiz mutlaqo anonim saqlanadi.",
+                "👋 <b>PU Anonymous botiga xush kelibsiz!</b>\n\nXabaringizni yuboring. Matnli xabarlar AI orqali tekshirilib, avtomatik kanalga joylanadi. Medialar esa moderatsiyadan o'tadi.\n\n🔒 Shaxsingiz mutlaqo anonim saqlanadi.",
                 [
                     'reply_markup' => ['inline_keyboard' => [[['text' => '❓ Yordam', 'callback_data' => 'help']]]],
                 ]
@@ -97,7 +97,7 @@ final class Bot
             return;
         }
 
-        $replyText = (string) ($message['reply_to_message']['text'] ?? '');
+        $replyText = (string) ($message['reply_to_message']['text'] ?? '') ?: (string) ($message['reply_to_message']['caption'] ?? '');
         if (preg_match('~COMMENT_REF:([A-Za-z0-9_.-]+)~', $replyText, $match) === 1) {
             $payload = Helpers::verifyHmacToken($match[1], $this->config['app_secret']);
             if (!is_array($payload) || empty($payload['thread'])) {
@@ -143,7 +143,7 @@ final class Bot
 
         $this->telegram->sendMessage(
             $this->config['discussion_group_id'],
-            '💬 Ushbu postga anonim izoh qoldirish uchun quyidagi tugmani bosing:',
+            '💬 <b>Ushbu postga anonim izoh qoldirish uchun quyidagi tugmani bosing:</b>',
             [
                 'reply_to_message_id' => $discMessageId,
                 'reply_markup' => [
@@ -239,7 +239,11 @@ final class Bot
                     'target' => $target,
                 ], $this->config['app_secret']);
 
-                $this->telegram->sendMessage($chatId, '✅ Xabaringiz anonim ravishda nashr qilindi.', [
+                $statusMsg = $target === 'comment'
+                    ? '✅ Anonim izohingiz post ostiga joylashtirildi.'
+                    : '✅ Xabaringiz anonim ravishda kanalga nashr qilindi.';
+
+                $this->telegram->sendMessage($chatId, $statusMsg, [
                     'reply_to_message_id' => $userMsgId,
                     'reply_markup' => [
                         'inline_keyboard' => [[
@@ -357,8 +361,8 @@ final class Bot
         $extra = [];
 
         if ($target === 'comment' && $threadId > 0) {
-            $extra['message_thread_id'] = $threadId;
             $extra['reply_to_message_id'] = $threadId;
+            $extra['message_thread_id'] = $threadId;
         }
 
         return $this->telegram->sendMessage(
@@ -377,8 +381,8 @@ final class Bot
         $extra = [];
 
         if ($target === 'comment' && $threadId > 0) {
-            $extra['message_thread_id'] = $threadId;
             $extra['reply_to_message_id'] = $threadId;
+            $extra['message_thread_id'] = $threadId;
         }
 
         if (($meta['type'] ?? 'text') === 'text') {
@@ -637,7 +641,16 @@ final class Bot
             return;
         }
 
-        $this->telegram->sendMessage($chatId, "✍️ Ushbu postga anonim izoh qoldirish uchun ushbu xabarga reply (javob) qilib xabaringizni yozing.\n\nCOMMENT_REF:" . htmlspecialchars($token, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'));
+        $this->telegram->sendMessage(
+            $chatId,
+            "✍️ <b>Ushbu postga anonim izoh qoldirish:</b>\n\nQuyidagi kiritish maydoniga izohingizni yozib yuboring.\n\nCOMMENT_REF:" . htmlspecialchars($token, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+            [
+                'reply_markup' => [
+                    'force_reply' => true,
+                    'selective' => true,
+                ]
+            ]
+        );
     }
 
     private function sendHelp(string $chatId): void

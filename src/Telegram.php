@@ -45,12 +45,27 @@ final class Telegram
 
     public function sendMessage(string|int $chatId, string $text, array $extra = []): array
     {
-        return $this->call('sendMessage', array_merge([
+        $params = array_merge([
             'chat_id' => $chatId,
             'text' => $text,
             'parse_mode' => 'HTML',
             'disable_web_page_preview' => true,
-        ], $extra));
+        ], $extra);
+
+        $res = $this->call('sendMessage', $params);
+
+        if (!($res['ok'] ?? false)) {
+            if (isset($params['reply_to_message_id'])) {
+                unset($params['reply_to_message_id']);
+                $res = $this->call('sendMessage', $params);
+            }
+            if (!($res['ok'] ?? false) && isset($params['parse_mode'])) {
+                unset($params['parse_mode']);
+                $res = $this->call('sendMessage', $params);
+            }
+        }
+
+        return $res;
     }
 
     public function editMessageText(string|int $chatId, int $messageId, string $text, array $extra = []): array
