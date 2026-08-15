@@ -80,7 +80,7 @@ class BotHandler {
 
         if ($text === '/cancel' || $text === '❌ Cancel' || $text === '❌ Bekor qilish') {
             $this->clearUserState($userId);
-            $this->sendMainMenu($chatId, "❌ Action cancelled.");
+            $this->sendMainMenu($chatId, "❌ Bekor qilindi.");
             return;
         }
 
@@ -89,12 +89,12 @@ class BotHandler {
             return;
         }
 
-        if ($text === '/help' || $text === '/rules') {
+        if ($text === '/help' || $text === '/rules' || $text === '⚠️ Rules' || $text === '⚠️ Qoidalar') {
             $this->sendRules($chatId);
             return;
         }
 
-        if ($text === '/about') {
+        if ($text === '/about' || $text === 'ℹ️ About' || $text === 'ℹ️ Bot haqida') {
             $this->sendAbout($chatId);
             return;
         }
@@ -104,29 +104,36 @@ class BotHandler {
             return;
         }
 
-        // Handle State Machines (Writing message or writing comment)
-        if (!empty($stateData)) {
-            if ($stateData['action'] === 'wait_message') {
-                if (empty($text) && !$mediaFileId) {
-                    $this->bot->sendMessage($chatId, "⚠️ Please send text, photo, or video for your anonymous submission.");
-                    return;
-                }
-                $this->processUserSubmission($chatId, $anonId, $text, $stateData['category'] ?? '📌 Other', $mediaType, $mediaFileId);
-                $this->clearUserState($userId);
-                return;
-            } elseif ($stateData['action'] === 'wait_comment') {
-                if (empty($text)) {
-                    $this->bot->sendMessage($chatId, "⚠️ Please write text for your comment.");
-                    return;
-                }
-                $this->processUserComment($chatId, $anonId, $text, (int)$stateData['submission_id']);
-                $this->clearUserState($userId);
+        if ($text === '📝 Send Anonymous Message' || $text === '📝 Xabar yuborish' || str_contains($text, 'Send Anonymous Message')) {
+            $this->setUserState($userId, ['action' => 'wait_message']);
+            $this->bot->sendMessage(
+                $chatId,
+                "✍️ <b>Anonim xabaringizni yuboring</b> (matn, rasm yoki video):\n\n<i>Eslatma: Shaxsiy telefon raqamingiz yoki shaxsingizni oshkor qiluvchi ma'lumotlarni kiritmang.</i>",
+                $this->getCancelKeyboard()
+            );
+            return;
+        }
+
+        // Handle Comment State
+        if (!empty($stateData) && $stateData['action'] === 'wait_comment') {
+            if (empty($text)) {
+                $this->bot->sendMessage($chatId, "⚠️ Iltimos, izohingiz uchun matn yozing.");
                 return;
             }
+            $this->processUserComment($chatId, $anonId, $text, (int)$stateData['submission_id']);
+            $this->clearUserState($userId);
+            return;
+        }
+
+        // DIRECT SUBMISSION: If user sends any text, photo, or video message, process it immediately!
+        if (!empty($text) || $mediaFileId) {
+            $this->processUserSubmission($chatId, $anonId, $text, '📌 General', $mediaType, $mediaFileId);
+            $this->clearUserState($userId);
+            return;
         }
 
         // Default Main Menu Response
-        $this->sendMainMenu($chatId, "👋 Welcome! Please select an option from the menu below:");
+        $this->sendMainMenu($chatId, "👋 Xush kelibsiz! Quyidagi menyudan kerakli bo'limni tanlang:");
     }
 
     private function handleStartCommand(int $chatId, int $userId, string $text, string $anonId): void {
@@ -141,7 +148,7 @@ class BotHandler {
                 $this->setUserState($userId, ['action' => 'wait_comment', 'submission_id' => $subId]);
                 $this->bot->sendMessage(
                     $chatId,
-                    "💬 <b>Write your anonymous comment:</b>\n\nYour identity remains 100% hidden.",
+                    "💬 <b>Anonim izohingizni yozing:</b>\n\nShaxsingiz 100% maxfiy saqlanadi.",
                     $this->getCancelKeyboard()
                 );
                 return;
@@ -151,9 +158,9 @@ class BotHandler {
         $this->clearUserState($userId);
         $this->sendMainMenu(
             $chatId,
-            "👋 <b>Welcome to University Anonymous Community!</b>\n\n" .
-            "Here students can anonymously submit thoughts, questions, suggestions, photos, or videos.\n\n" .
-            "🔒 Your identity is completely hidden from moderators and other users."
+            "👋 <b>University Anonymous Community botiga xush kelibsiz!</b>\n\n" .
+            "Bu yerda anonim tarzda fikir, savol, taklif, rasm va videolaringizni yuborishingiz mumkin.\n\n" .
+            "🔒 Shaxsingiz moderatorlar va boshqa foydalanuvchilardan 100% maxfiy saqlanadi."
         );
     }
 
@@ -173,38 +180,22 @@ class BotHandler {
         $anonId = $this->anonymity->getOrCreateSession($userId);
 
         if ($data === 'btn_send') {
+            $this->setUserState($userId, ['action' => 'wait_message']);
             $this->bot->answerCallbackQuery($cbId);
             $this->bot->sendMessage(
                 $chatId,
-                "📚 <b>Select a category for your anonymous submission:</b>",
-                $this->getCategoryKeyboard()
+                "✍️ <b>Anonim xabaringizni yuboring</b> (matn, rasm yoki video):\n\n<i>Eslatma: Shaxsiy telefon raqamingiz yoki shaxsingizni oshkor qiluvchi ma'lumotlarni kiritmang.</i>",
+                $this->getCancelKeyboard()
             );
             return;
         }
 
         if (str_starts_with($data, 'cat_')) {
-            $categoryKey = str_replace('cat_', '', $data);
-            $categories = [
-                'education' => '📚 Education',
-                'university' => '🏫 University',
-                'teachers' => '👨‍🏫 Teachers',
-                'exams' => '📝 Exams',
-                'payments' => '💰 Tuition & Fees',
-                'campus' => '🍽 Campus Life',
-                'suggestions' => '💡 Suggestions',
-                'questions' => '❓ Questions',
-                'humor' => '😂 Humor',
-                'confession' => '❤️ Confession & Romance',
-                'announcement' => '📢 Announcement',
-                'other' => '📌 Other'
-            ];
-            $categoryName = $categories[$categoryKey] ?? '📌 Other';
-
-            $this->setUserState($userId, ['action' => 'wait_message', 'category' => $categoryName]);
+            $this->setUserState($userId, ['action' => 'wait_message']);
             $this->bot->answerCallbackQuery($cbId);
             $this->bot->sendMessage(
                 $chatId,
-                "✍️ Send your anonymous submission (text, photo, or video) for <b>" . htmlspecialchars($categoryName) . "</b>:\n\n<i>Note: Do not include personal phone numbers or identity details.</i>",
+                "✍️ <b>Anonim xabaringizni yuboring</b> (matn, rasm yoki video):",
                 $this->getCancelKeyboard()
             );
             return;
@@ -219,7 +210,7 @@ class BotHandler {
         if (str_starts_with($data, 'del_')) {
             $pubId = '#' . str_replace('del_', '', $data);
             $this->deleteSubmissionByOwner($chatId, $anonId, $pubId);
-            $this->bot->answerCallbackQuery($cbId, "✅ Your submission was deleted!");
+            $this->bot->answerCallbackQuery($cbId, "✅ Xabaringiz o'chirildi!");
             return;
         }
 
@@ -238,7 +229,7 @@ class BotHandler {
         if ($data === 'btn_main' || $data === 'btn_cancel') {
             $this->clearUserState($userId);
             $this->bot->answerCallbackQuery($cbId);
-            $this->sendMainMenu($chatId, "🏠 Main Menu:");
+            $this->sendMainMenu($chatId, "🏠 Asosiy menyu:");
             return;
         }
 
@@ -304,13 +295,11 @@ class BotHandler {
         ];
         $this->moderationService->sendToModerationGroup($submission);
 
-        // Check if AI flagged a sensitive category or flagged for review
-        if (!empty($aiEval['flagged_category']) || $aiEval['decision'] !== 'APPROVED_FOR_MODERATION') {
-            $flaggedCat = $aiEval['flagged_category'] ?? ($aiEval['categories'][0] ?? 'Sensitive Content');
-            $responseText = "⚠️ We detected a message under category <b>" . htmlspecialchars($flaggedCat) . "</b> by AI filter. Please wait for admin approval.\n\nSubmission Code: <code>{$pubId}</code>";
-        } else {
-            $responseText = "✅ <b>Your message has been received!</b>\n\nIt is currently being reviewed by moderators.\nSubmission Code: <code>{$pubId}</code>\nYour identity is completely hidden.";
-        }
+        // Response to user
+        $responseText = "✅ <b>Xabaringiz qabul qilindi!</b>\n\n" .
+                        "Moderatorlar ko'rib chiqqach kanalda chop etiladi.\n\n" .
+                        "🆔 Submissiya kodi: <code>{$pubId}</code>\n" .
+                        "🔒 Shaxsingiz 100% maxfiy saqlanadi.";
 
         $this->sendMainMenu($chatId, $responseText);
     }

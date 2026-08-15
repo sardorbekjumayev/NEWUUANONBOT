@@ -75,9 +75,10 @@ class AnonymityTest {
     }
 
     private function testIdentityIsolationInDatabase(): void {
-        $anonId = 'anon_test_' . rand(1000, 9999);
-        $pubId = '#UAC_TEST1';
-        $modId = '#M_TEST1';
+        $randSuffix = rand(10000, 99999);
+        $anonId = 'anon_test_' . $randSuffix;
+        $pubId = 'UAC_TEST_' . $randSuffix;
+        $modId = 'M_TEST_' . $randSuffix;
         $ownerToken = $this->anonymity->generateOwnerToken();
 
         $stmt = $this->db->prepare("INSERT INTO submissions (public_id, mod_id, anon_id, owner_token, category, content, sanitized_content, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'Test', 'Test text', 'Test text', 'approved', NOW(), NOW())");
@@ -94,13 +95,15 @@ class AnonymityTest {
     }
 
     private function testUnauthorizedDeletionPrevention(): void {
-        $ownerAnonId = 'anon_owner_1';
-        $strangerAnonId = 'anon_stranger_2';
-        $pubId = '#UAC_DEL1';
+        $ownerAnonId = 'anon_owner_' . rand(1000, 9999);
+        $strangerAnonId = 'anon_stranger_' . rand(1000, 9999);
+        $randSuffix = rand(10000, 99999);
+        $pubId = 'UAC_DEL_' . $randSuffix;
+        $modId = 'M_DEL_' . $randSuffix;
         $ownerToken = $this->anonymity->generateOwnerToken();
 
         $stmt = $this->db->prepare("INSERT INTO submissions (public_id, mod_id, anon_id, owner_token, category, content, sanitized_content, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'Test', 'Delete me', 'Delete me', 'approved', NOW(), NOW())");
-        $stmt->execute([$pubId, '#M_DEL1', $ownerAnonId, $ownerToken]);
+        $stmt->execute([$pubId, $modId, $ownerAnonId, $ownerToken]);
 
         // Attempt deletion by stranger
         $check = $this->db->prepare("SELECT COUNT(*) FROM submissions WHERE public_id = ? AND anon_id = ?");
@@ -118,7 +121,7 @@ class AnonymityTest {
     }
 
     private function testRateLimiting(): void {
-        $testAnon = 'anon_ratelimit_test';
+        $testAnon = 'anon_ratelimit_' . rand(10000, 99999);
         for ($i = 0; $i < 5; $i++) {
             $this->rateLimiter->recordAction($testAnon, 'submission');
         }
@@ -128,13 +131,14 @@ class AnonymityTest {
     }
 
     private function testDuplicateDetection(): void {
-        $uniqueMsg = "Unikal matn " . rand(10000, 99999) . " universitedagi yangilik";
+        $uniqueMsg = "Xabar kodi " . bin2hex(random_bytes(8)) . " va shaxsiy taklif " . rand(10000, 99999);
         $isDup1 = $this->rateLimiter->isDuplicate($uniqueMsg);
         $this->assert($isDup1 === false, "First time unique message is not duplicate");
 
         // Insert into DB
+        $randSuffix = rand(10000, 99999);
         $stmt = $this->db->prepare("INSERT INTO submissions (public_id, mod_id, anon_id, owner_token, category, content, sanitized_content, status, created_at, updated_at) VALUES (?, ?, 'anon_dup', 'token', 'General', ?, ?, 'approved', NOW(), NOW())");
-        $stmt->execute(['#UAC_DUP1', '#M_DUP1', $uniqueMsg, $uniqueMsg]);
+        $stmt->execute(['UAC_DUP_' . $randSuffix, 'M_DUP_' . $randSuffix, $uniqueMsg, $uniqueMsg]);
 
         $isDup2 = $this->rateLimiter->isDuplicate($uniqueMsg);
         $this->assert($isDup2 === true, "Repeated submission detected as duplicate");
