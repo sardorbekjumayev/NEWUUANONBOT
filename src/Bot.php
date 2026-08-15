@@ -203,6 +203,38 @@ final class Bot
 
         $textForAI = trim($content['text']);
 
+        if ($target === 'comment') {
+            $publish = $this->publishContentDirect($content, 'comment', $threadId ?? 0);
+            if ($publish['ok']) {
+                $publishedId = (int) ($publish['result']['message_id'] ?? 0);
+                $statusMsg = '✅ Anonim izohingiz yuborildi.';
+                $statusExtra = [
+                    'reply_markup' => [
+                        'inline_keyboard' => [[
+                            ['text' => '🗑 Izohni o\'chirish', 'callback_data' => $this->deleteCallback('delp', 'comment', $publishedId, $fromId)]
+                        ]]
+                    ]
+                ];
+
+                if ($checkingId > 0) {
+                    $this->telegram->editMessageText($chatId, $checkingId, $statusMsg, $statusExtra);
+                } else {
+                    $statusExtra['reply_to_message_id'] = $userMsgId;
+                    $this->telegram->sendMessage($chatId, $statusMsg, $statusExtra);
+                }
+                Helpers::log('INFO', 'anonymous comment published');
+                return;
+            }
+
+            $failText = '⚠️ Izohni yuborishda xatolik bo\'ldi. Iltimos, keyinroq qayta urinib ko\'ring.';
+            if ($checkingId > 0) {
+                $this->telegram->editMessageText($chatId, $checkingId, $failText);
+            } else {
+                $this->telegram->sendMessage($chatId, $failText, ['reply_to_message_id' => $userMsgId]);
+            }
+            return;
+        }
+
         // Rule: Medias ALWAYS go to manual review queue without AI auto-publish
         if ($content['type'] !== 'text') {
             $ai = ['decision' => 'review', 'category' => 'other', 'media' => true];
@@ -358,7 +390,7 @@ final class Bot
 
         $publish = $this->publish($message, $meta);
         if (!$publish['ok']) {
-            $this->telegram->answerCallback($id, 'Kanalga joylashda xatolik.', true);
+            $this->telegram->answerCallback($id, 'Kanalga joylashda xatolik: ' . $this->shortError($publish), true);
             return;
         }
 
@@ -372,7 +404,7 @@ final class Bot
 
     private function publishTextDirect(string $content, string $target, int $threadId): array
     {
-        $caption = $content === '' ? 'PU Anonymous' : "PU Anonymous\n\n" . $content;
+        $caption = $this->publicText($content);
         $extra = [];
 
         if ($target === 'comment' && $threadId > 0) {
@@ -387,12 +419,40 @@ final class Bot
         );
     }
 
+    private function publishContentDirect(array $content, string $target, int $threadId): array
+    {
+        $caption = $this->publicText((string) ($content['text'] ?? ''));
+        $chatId = $target === 'comment' ? $this->config['discussion_group_id'] : $this->config['channel_id'];
+        $extra = [];
+
+        if ($target === 'comment' && $threadId > 0) {
+            $extra['reply_to_message_id'] = $threadId;
+            $extra['message_thread_id'] = $threadId;
+        }
+
+        if (($content['type'] ?? 'text') === 'text') {
+            return $this->telegram->sendMessage($chatId, $caption, $extra);
+        }
+
+        if (($content['type'] ?? '') === 'unsupported') {
+            return ['ok' => false, 'description' => 'Unsupported comment content'];
+        }
+
+        return $this->telegram->sendMediaByType(
+            $chatId,
+            (string) $content['type'],
+            (string) $content['file_id'],
+            ($content['type'] ?? '') === 'sticker' ? '' : $caption,
+            $extra
+        );
+    }
+
     private function publish(array $message, array $meta): array
     {
         $content = trim((string) ($meta['content'] ?? ''));
         $target = (string) ($meta['target'] ?? 'post');
         $threadId = (int) ($meta['thread'] ?? 0);
-        $caption = $content === '' ? 'PU Anonymous' : "PU Anonymous\n\n" . $content;
+        $caption = $this->publicText($content);
         $extra = [];
 
         if ($target === 'comment' && $threadId > 0) {
@@ -416,6 +476,16 @@ final class Bot
             $sourceMessageId,
             array_merge($extra, ($meta['type'] ?? '') === 'sticker' ? [] : ['caption' => $caption, 'parse_mode' => 'HTML'])
         );
+    }
+
+    private function publicText(string $content): string
+    {
+        $content = trim($content);
+        if ($content === '') {
+            return 'PU Anonymous';
+        }
+
+        return 'PU Anonymous' . "\n\n" . htmlspecialchars($content, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     private function sendToModeration(array $content, array $meta): array
@@ -616,14 +686,22 @@ final class Bot
         $buttonMessageId = (int) ($callback['message']['message_id'] ?? 0);
 
         if ($action === 'delw') {
-            $this->telegram->deleteMessage($this->config['moderation_group_id'], $messageId);
+            $delete = $this->telegram->deleteMessage($this->config['moderation_group_id'], $messageId);
+            if (!($delete['ok'] ?? false)) {
+                $this->telegram->answerCallback($id, 'O\'chirishda xatolik: ' . $this->shortError($delete), true);
+                return;
+            }
             $this->telegram->answerCallback($id, 'Xabar bekor qilindi.');
             $this->editOrSendPrivateStatus($chatId, $buttonMessageId, '🗑 Xabaringiz moderatsiyadan olindi va o\'chirildi.');
             return;
         }
 
         $targetChat = $target === 'comment' ? $this->config['discussion_group_id'] : $this->config['channel_id'];
-        $this->telegram->deleteMessage($targetChat, $messageId);
+        $delete = $this->telegram->deleteMessage($targetChat, $messageId);
+        if (!($delete['ok'] ?? false)) {
+            $this->telegram->answerCallback($id, 'O\'chirishda xatolik: ' . $this->shortError($delete), true);
+            return;
+        }
         $this->telegram->answerCallback($id, 'Post o\'chirildi.');
         $this->editOrSendPrivateStatus($chatId, $buttonMessageId, '🗑 Nashr qilingan xabaringiz o\'chirildi.');
     }
@@ -695,6 +773,12 @@ final class Bot
     private function sendHelp(string $chatId): void
     {
         $this->telegram->sendMessage($chatId, "❓ Qanday ishlaydi\n\n1. Xabaringizni yuboring.\n2. Matnlar AI orqali avtomatik joylanadi.\n3. Medialar adminlar tomonidan tekshiriladi.\n4. Qabul qilinsa anonim nashr etiladi.\n\nSiz kanal postlariga ham anonim izoh qoldirishingiz mumkin.\n\n🔒 Shaxsingiz mutlaqo oshkor etilmaydi.");
+    }
+
+    private function shortError(array $result): string
+    {
+        $description = (string) ($result['description'] ?? 'noma\'lum xato');
+        return mb_substr($description, 0, 160);
     }
 
     private function allowRate(string $sender): bool
