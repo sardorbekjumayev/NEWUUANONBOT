@@ -131,16 +131,12 @@ final class Bot
             return;
         }
 
-        $this->submit($message, 'post');
+        $this->submit($message, 'post', $this->privateChannelReplyTargetId($message));
     }
 
     private function handleDiscussionGroupMessage(array $message): void
     {
-        $isChannelPost = !empty($message['is_automatic_forward'])
-            || (string) ($message['sender_chat']['id'] ?? '') === (string) $this->config['channel_id']
-            || (string) ($message['forward_from_chat']['id'] ?? '') === (string) $this->config['channel_id'];
-
-        if ($isChannelPost) {
+        if ($this->isChannelDiscussionPost($message)) {
             $this->sendAnonymousReplyButton($message);
             return;
         }
@@ -197,7 +193,7 @@ final class Bot
             $content['text'] = trim((string) preg_replace('~^/anon(?:@\w+)?\s*~u', '', $content['text']));
         }
 
-        $replyToId = $isReply ? (int) ($message['reply_to_message']['message_id'] ?? 0) : 0;
+        $replyToId = $isReply ? $this->resolveDiscussionReplyTargetId($message['reply_to_message']) : 0;
         $threadId = (int) ($message['message_thread_id'] ?? 0);
         $this->telegram->deleteMessage($this->config['discussion_group_id'], (int) ($message['message_id'] ?? 0));
         $publish = $this->publishDiscussionAnonymous($content, $replyToId, $threadId);
@@ -478,6 +474,8 @@ final class Bot
         if ($target === 'comment' && $threadId > 0) {
             $extra['reply_to_message_id'] = $threadId;
             $extra['message_thread_id'] = $threadId;
+        } elseif ($target === 'post' && $threadId > 0) {
+            $extra['reply_to_message_id'] = $threadId;
         }
 
         return $this->telegram->sendMessage(
@@ -496,6 +494,8 @@ final class Bot
         if ($target === 'comment' && $threadId > 0) {
             $extra['reply_to_message_id'] = $threadId;
             $extra['message_thread_id'] = $threadId;
+        } elseif ($target === 'post' && $threadId > 0) {
+            $extra['reply_to_message_id'] = $threadId;
         }
 
         if (($content['type'] ?? 'text') === 'text') {
@@ -548,6 +548,65 @@ final class Bot
         );
     }
 
+    private function isChannelDiscussionPost(array $message): bool
+    {
+        if (!empty($message['is_automatic_forward'])) {
+            return true;
+        }
+
+        if (($message['sender_chat']['type'] ?? '') === 'channel') {
+            return true;
+        }
+
+        if (($message['forward_from_chat']['type'] ?? '') === 'channel') {
+            return true;
+        }
+
+        return (string) ($message['sender_chat']['id'] ?? '') === (string) $this->config['channel_id']
+            || (string) ($message['forward_from_chat']['id'] ?? '') === (string) $this->config['channel_id'];
+    }
+
+    private function privateChannelReplyTargetId(array $message): int
+    {
+        $reply = $message['reply_to_message'] ?? null;
+        if (!is_array($reply)) {
+            return 0;
+        }
+
+        $channelId = (string) ($this->config['channel_id'] ?? '');
+        if ($channelId === '') {
+            return 0;
+        }
+
+        if ((string) ($reply['forward_from_chat']['id'] ?? '') === $channelId) {
+            return (int) ($reply['forward_from_message_id'] ?? 0);
+        }
+
+        $origin = $reply['forward_origin'] ?? null;
+        if (is_array($origin)
+            && ($origin['type'] ?? '') === 'channel'
+            && (string) ($origin['chat']['id'] ?? '') === $channelId
+        ) {
+            return (int) ($origin['message_id'] ?? 0);
+        }
+
+        return 0;
+    }
+
+    private function resolveDiscussionReplyTargetId(array $reply): int
+    {
+        if ($this->isChannelDiscussionPost($reply)) {
+            return (int) ($reply['message_id'] ?? 0);
+        }
+
+        $parent = $reply['reply_to_message'] ?? null;
+        if (is_array($parent) && $this->isChannelDiscussionPost($parent)) {
+            return (int) ($parent['message_id'] ?? 0);
+        }
+
+        return (int) ($reply['message_id'] ?? 0);
+    }
+
     private function publish(array $message, array $meta): array
     {
         $content = trim((string) ($meta['content'] ?? ''));
@@ -559,6 +618,8 @@ final class Bot
         if ($target === 'comment' && $threadId > 0) {
             $extra['reply_to_message_id'] = $threadId;
             $extra['message_thread_id'] = $threadId;
+        } elseif ($target === 'post' && $threadId > 0) {
+            $extra['reply_to_message_id'] = $threadId;
         }
 
         if (($meta['type'] ?? 'text') === 'text') {
