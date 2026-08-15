@@ -1,49 +1,36 @@
 <?php
-// setup.php - Initialize Database and Seed Default Data
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/config.php';
-require_once __DIR__ . '/src/Database.php';
+use PUAnonymous\Telegram;
 
-use UAC\Database;
+$config = require __DIR__ . '/config/config.php';
 
-echo "=== University Anonymous Community Platform Setup ===\n";
+echo "=== PU Anonymous Stateless Bot Setup ===\n";
+echo "Database: disabled\n";
+echo "Webhook file: index.php\n";
 
-try {
-    $db = Database::getConnection();
-    Database::initSchema();
-    echo "✓ Database schema initialized successfully.\n";
-
-    // Column migrations for submissions table
-    $driver = strtolower($db->getAttribute(PDO::ATTR_DRIVER_NAME));
-    if ($driver === 'mysql') {
-        $cols = $db->query("SHOW COLUMNS FROM submissions LIKE 'media_type'")->fetchAll();
-        if (empty($cols)) {
-            $db->exec("ALTER TABLE submissions ADD COLUMN media_type VARCHAR(20) DEFAULT NULL AFTER sanitized_content");
-            $db->exec("ALTER TABLE submissions ADD COLUMN media_file_id VARCHAR(255) DEFAULT NULL AFTER media_type");
-            echo "✓ Added media_type and media_file_id columns to submissions table.\n";
-        }
-    }
-
-    $config = require __DIR__ . '/config.php';
-    $defaultUser = $config['admin']['default_user'];
-    $defaultPass = $config['admin']['default_pass'];
-
-    // Check if admin user exists
-    $stmt = $db->prepare("SELECT COUNT(*) FROM admin_users WHERE username = ?");
-    $stmt->execute([$defaultUser]);
-    if ($stmt->fetchColumn() == 0) {
-        $hash = password_hash($defaultPass, PASSWORD_DEFAULT);
-        $insert = $db->prepare("INSERT INTO admin_users (username, password_hash, role, created_at) VALUES (?, ?, 'SUPER_ADMIN', ?)");
-        $insert->execute([$defaultUser, $hash, date('Y-m-d H:i:s')]);
-        echo "✓ Super Admin user created: '{$defaultUser}' / '{$defaultPass}'\n";
-    } else {
-        echo "✓ Super Admin user already exists.\n";
-    }
-
-    echo "=== Setup Completed Successfully! ===\n";
-} catch (Exception $e) {
-    echo "❌ Error during setup: " . $e->getMessage() . "\n";
+if (($config['bot_token'] ?? '') === '') {
+    echo "BOT_TOKEN is empty. Fill .env first.\n";
     exit(1);
 }
+
+if (($config['webhook_url'] ?? '') === '') {
+    echo "WEBHOOK_URL is empty. Example: https://example.com/index.php\n";
+    exit(1);
+}
+
+$telegram = new Telegram($config['bot_token']);
+$result = $telegram->call('setWebhook', array_filter([
+    'url' => $config['webhook_url'],
+    'secret_token' => $config['webhook_secret'] ?: null,
+    'allowed_updates' => ['message', 'callback_query'],
+]));
+
+if (($result['ok'] ?? false) !== true) {
+    echo "Webhook setup failed: " . ($result['description'] ?? 'unknown error') . "\n";
+    exit(1);
+}
+
+echo "Webhook configured successfully.\n";
+echo "Health check: " . rtrim((string) $config['webhook_url'], '/') . "?health=1\n";

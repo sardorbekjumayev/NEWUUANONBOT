@@ -23,22 +23,28 @@ composer install --no-dev
 10. Run locally for testing:
 
 ```bash
-php -S 0.0.0.0:8080 -t public
+php -S 0.0.0.0:8080 -t .
 ```
 
-11. Configure Telegram webhook:
+11. Configure Telegram webhook. This project uses root `index.php` as the webhook file:
 
 ```bash
 curl "https://api.telegram.org/bot$BOT_TOKEN/setWebhook" \
-  -d "url=$WEBHOOK_URL/public/webhook.php" \
+  -d "url=$WEBHOOK_URL" \
   -d "secret_token=$WEBHOOK_SECRET"
+```
+
+Or fill `.env` and run:
+
+```bash
+php setup.php
 ```
 
 For Docker:
 
 ```bash
-docker build -t pu-anonymous-v2 .
-docker run --env-file .env -p 8080:8080 pu-anonymous-v2
+docker build -t pu-anonymous .
+docker run --env-file .env -p 8080:8080 pu-anonymous
 ```
 
 ## Required Tests

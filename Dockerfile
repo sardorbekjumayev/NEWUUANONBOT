@@ -1,26 +1,16 @@
-FROM php:8.4-fpm-alpine
+FROM php:8.3-cli-alpine
 
-# Install system dependencies & PHP extensions
-RUN apk add --no-cache \
-    nginx \
-    curl \
-    libpng-dev \
-    libxml2-dev \
-    zip \
-    unzip \
-    oniguruma-dev \
-    postgresql-dev \
-    mysql-client \
-    && docker-php-ext-install pdo pdo_mysql pdo_pgsql mbstring gd xml
+RUN apk add --no-cache git unzip \
+    && docker-php-ext-install opcache
 
-WORKDIR /var/www/html
+WORKDIR /app
 
-# Copy application files
-COPY . /var/www/html
+COPY composer.json composer.json
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+RUN composer install --no-dev --prefer-dist --no-interaction --no-progress
 
-# Nginx setup
-COPY ./infrastructure/nginx.conf /etc/nginx/http.d/default.conf
+COPY . .
 
-EXPOSE 80
+EXPOSE 8080
 
-CMD ["sh", "-c", "php-fpm -D && nginx -g 'daemon off;'"]
+CMD ["php", "-S", "0.0.0.0:8080", "-t", "/app"]

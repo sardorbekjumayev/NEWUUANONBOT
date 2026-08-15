@@ -228,6 +228,11 @@ final class Bot
 
         [$action, $sig] = array_pad(explode(':', $data, 2), 2, '');
         $messageId = (int) ($message['message_id'] ?? 0);
+        if ($action === 'noop' && $this->verifyAction($action, $messageId, $sig)) {
+            $this->telegram->answerCallback($id, 'Reply to this moderation message with /edit new text.');
+            return;
+        }
+
         if (!in_array($action, ['approve', 'reject'], true) || !$this->verifyAction($action, $messageId, $sig)) {
             $this->telegram->answerCallback($id, 'Invalid or expired action.', true);
             return;
@@ -284,10 +289,12 @@ final class Bot
             );
         }
 
+        $sourceMessageId = (int) ($meta['media_message'] ?? $message['message_id'] ?? 0);
+
         return $this->telegram->copyMessage(
             $target === 'comment' ? $this->config['discussion_group_id'] : $this->config['channel_id'],
             $this->config['moderation_group_id'],
-            (int) ($message['message_id'] ?? 0),
+            $sourceMessageId,
             array_merge($extra, ($meta['type'] ?? '') === 'sticker' ? [] : ['caption' => $caption, 'parse_mode' => 'HTML'])
         );
     }
@@ -297,6 +304,21 @@ final class Bot
         $text = $this->formatModeration($meta);
         if ($content['type'] === 'text' || $content['type'] === 'unsupported') {
             return $this->telegram->sendMessage($this->config['moderation_group_id'], $text);
+        }
+
+        if ($content['type'] === 'sticker') {
+            $sticker = $this->telegram->sendMediaByType(
+                $this->config['moderation_group_id'],
+                'sticker',
+                $content['file_id'],
+                ''
+            );
+            $meta['media_message'] = (int) ($sticker['result']['message_id'] ?? 0);
+            return $this->telegram->sendMessage(
+                $this->config['moderation_group_id'],
+                $this->formatModeration($meta),
+                $meta['media_message'] > 0 ? ['reply_to_message_id' => $meta['media_message']] : []
+            );
         }
 
         return $this->telegram->sendMediaByType(
@@ -320,18 +342,10 @@ final class Bot
             return ['type' => 'photo', 'text' => $caption, 'file_id' => (string) ($best['file_id'] ?? '')];
         }
 
-        foreach (['video', 'animation', 'document'] as $type) {
+        foreach (['video', 'animation', 'document', 'sticker'] as $type) {
             if (isset($message[$type]['file_id'])) {
                 return ['type' => $type, 'text' => $caption, 'file_id' => (string) $message[$type]['file_id']];
             }
-        }
-
-        if (isset($message['sticker']['file_id'])) {
-            return [
-                'type' => 'unsupported',
-                'text' => '[Sticker: manual review required. Telegram stickers cannot carry moderation metadata safely.]',
-                'file_id' => '',
-            ];
         }
 
         return ['type' => 'unsupported', 'text' => '[Unsupported Telegram content]', 'file_id' => ''];
@@ -360,7 +374,8 @@ final class Bot
             . "\n\nRef: " . htmlspecialchars((string) ($meta['owner'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
             . "\nType: " . htmlspecialchars((string) ($meta['type'] ?? 'text'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
             . "\nTarget: " . htmlspecialchars((string) ($meta['target'] ?? 'post'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
-            . "\nThread: " . (int) ($meta['thread'] ?? 0);
+            . "\nThread: " . (int) ($meta['thread'] ?? 0)
+            . "\nMedia: " . (int) ($meta['media_message'] ?? 0);
     }
 
     private function readMeta(array $message): array
@@ -371,6 +386,7 @@ final class Bot
         preg_match('~Type:\s*(\w+)~', $text, $type);
         preg_match('~Target:\s*(\w+)~', $text, $target);
         preg_match('~Thread:\s*(\d+)~', $text, $thread);
+        preg_match('~Media:\s*(\d+)~', $text, $media);
 
         $contentBlock = trim((string) preg_replace('~^🆕 Anonymous Submission\s*|\n\n(?:🤖|⚠️|🔴).*~us', '', $text));
         $contentBlock = $contentBlock === '[media only]' ? '' : html_entity_decode($contentBlock, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -381,6 +397,7 @@ final class Bot
             'type' => $type[1] ?? 'text',
             'target' => $target[1] ?? 'post',
             'thread' => (int) ($thread[1] ?? 0),
+            'media_message' => (int) ($media[1] ?? 0),
             'content' => $contentBlock,
             'ai' => 'REVIEW',
             'category' => 'OTHER',
