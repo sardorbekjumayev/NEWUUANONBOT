@@ -124,15 +124,20 @@ final class Bot
 
     private function handleDiscussionGroupMessage(array $message): void
     {
-        // Check if message is a new post or automatic forward from channel
         $isChannelPost = !empty($message['is_automatic_forward'])
             || (string) ($message['sender_chat']['id'] ?? '') === (string) $this->config['channel_id']
             || (string) ($message['forward_from_chat']['id'] ?? '') === (string) $this->config['channel_id'];
 
-        if (!$isChannelPost) {
+        if ($isChannelPost) {
+            $this->sendAnonymousReplyButton($message);
             return;
         }
 
+        $this->handleDiscussionAnonymousMessage($message);
+    }
+
+    private function sendAnonymousReplyButton(array $message): void
+    {
         $discMessageId = (int) ($message['message_id'] ?? 0);
         if ($discMessageId <= 0 || $this->config['bot_username'] === '') {
             return;
@@ -153,6 +158,52 @@ final class Bot
                 ]
             ]
         );
+    }
+
+    private function handleDiscussionAnonymousMessage(array $message): void
+    {
+        if (!empty($message['from']['is_bot'])) {
+            return;
+        }
+
+        $text = trim((string) ($message['text'] ?? $message['caption'] ?? ''));
+        $isAnonCommand = preg_match('~^/anon(?:@\w+)?(?:\s+(.+))?$~su', $text, $anonMatch) === 1;
+        $isReply = isset($message['reply_to_message']);
+
+        if (!$isAnonCommand && !$isReply) {
+            return;
+        }
+
+        $content = $this->extractContent($message);
+        if ($isAnonCommand && $content['type'] === 'text') {
+            $content['text'] = trim((string) ($anonMatch[1] ?? ''));
+            if ($content['text'] === '') {
+                $this->telegram->deleteMessage($this->config['discussion_group_id'], (int) ($message['message_id'] ?? 0));
+                return;
+            }
+        } elseif ($isAnonCommand && $content['type'] !== 'sticker') {
+            $content['text'] = trim((string) preg_replace('~^/anon(?:@\w+)?\s*~u', '', $content['text']));
+        }
+
+        $replyToId = $isReply ? (int) ($message['reply_to_message']['message_id'] ?? 0) : 0;
+        $threadId = (int) ($message['message_thread_id'] ?? 0);
+        $this->telegram->deleteMessage($this->config['discussion_group_id'], (int) ($message['message_id'] ?? 0));
+        $publish = $this->publishDiscussionAnonymous($content, $replyToId, $threadId);
+
+        if (!($publish['ok'] ?? false)) {
+            Helpers::log('ERROR', 'anonymous discussion publish failed', ['description' => $publish['description'] ?? 'unknown']);
+            return;
+        }
+
+        $publishedId = (int) ($publish['result']['message_id'] ?? 0);
+        $fromId = (string) ($message['from']['id'] ?? '');
+        if ($publishedId > 0 && $fromId !== '') {
+            $this->telegram->editReplyMarkup($this->config['discussion_group_id'], $publishedId, [
+                'inline_keyboard' => [[
+                    ['text' => '🗑 O\'chirish', 'callback_data' => $this->deleteCallback('delp', 'comment', $publishedId, $fromId)]
+                ]]
+            ]);
+        }
     }
 
     private function handleModerationMessage(array $message): void
@@ -447,6 +498,39 @@ final class Bot
         );
     }
 
+    private function publishDiscussionAnonymous(array $content, int $replyToId, int $threadId): array
+    {
+        $caption = $this->publicText((string) ($content['text'] ?? ''));
+        $extra = [];
+
+        if ($threadId > 0) {
+            $extra['message_thread_id'] = $threadId;
+        }
+        if ($replyToId > 0) {
+            $extra['reply_to_message_id'] = $replyToId;
+        }
+
+        if (($content['type'] ?? 'text') === 'text') {
+            if ($caption === '') {
+                return ['ok' => false, 'description' => 'Empty anonymous text'];
+            }
+
+            return $this->telegram->sendMessage($this->config['discussion_group_id'], $caption, $extra);
+        }
+
+        if (($content['type'] ?? '') === 'unsupported') {
+            return ['ok' => false, 'description' => 'Unsupported discussion content'];
+        }
+
+        return $this->telegram->sendMediaByType(
+            $this->config['discussion_group_id'],
+            (string) $content['type'],
+            (string) $content['file_id'],
+            ($content['type'] ?? '') === 'sticker' ? '' : $caption,
+            $extra
+        );
+    }
+
     private function publish(array $message, array $meta): array
     {
         $content = trim((string) ($meta['content'] ?? ''));
@@ -482,10 +566,10 @@ final class Bot
     {
         $content = trim($content);
         if ($content === '') {
-            return 'PU Anonymous';
+            return '';
         }
 
-        return 'PU Anonymous' . "\n\n" . htmlspecialchars($content, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        return htmlspecialchars($content, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     private function sendToModeration(array $content, array $meta): array
@@ -683,6 +767,7 @@ final class Bot
 
         [$action, $target, $messageId] = $parsed;
         $chatId = (string) ($callback['message']['chat']['id'] ?? $fromId);
+        $isPrivateCallback = (($callback['message']['chat']['type'] ?? '') === 'private');
         $buttonMessageId = (int) ($callback['message']['message_id'] ?? 0);
 
         if ($action === 'delw') {
@@ -703,7 +788,9 @@ final class Bot
             return;
         }
         $this->telegram->answerCallback($id, 'Post o\'chirildi.');
-        $this->editOrSendPrivateStatus($chatId, $buttonMessageId, '🗑 Nashr qilingan xabaringiz o\'chirildi.');
+        if ($isPrivateCallback) {
+            $this->editOrSendPrivateStatus($chatId, $buttonMessageId, '🗑 Nashr qilingan xabaringiz o\'chirildi.');
+        }
     }
 
     private function deleteCallback(string $action, string $target, int $messageId, string $ownerId): string
