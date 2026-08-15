@@ -37,11 +37,9 @@ $loadEnv = static function (string $path): void {
                 (str_starts_with($val, "'") && str_ends_with($val, "'"))) {
                 $val = substr($val, 1, -1);
             }
-            if (!array_key_exists($key, $_SERVER) && !array_key_exists($key, $_ENV)) {
-                putenv("{$key}={$val}");
-                $_ENV[$key] = $val;
-                $_SERVER[$key] = $val;
-            }
+            putenv("{$key}={$val}");
+            $_ENV[$key] = $val;
+            $_SERVER[$key] = $val;
         }
     }
 };
@@ -67,10 +65,10 @@ return [
     'channel_id' => (string) $env('CHANNEL_ID', ''),
     'moderation_group_id' => (string) $env('MODERATION_GROUP_ID', ''),
     'discussion_group_id' => (string) $env('DISCUSSION_GROUP_ID', ''),
-    'ai_enabled' => filter_var($env('AI_ENABLED', 'true'), FILTER_VALIDATE_BOOLEAN),
-    'ai_provider' => strtolower((string) $env('AI_PROVIDER', 'gemini')),
+    'gemini_enabled' => filter_var($env('GEMINI_ENABLED', $env('AI_ENABLED', 'true')), FILTER_VALIDATE_BOOLEAN),
     'gemini_api_key' => (string) $env('GEMINI_API_KEY', ''),
     'gemini_model' => (string) $env('GEMINI_MODEL', 'gemini-2.5-flash-lite'),
+    'groq_enabled' => filter_var($env('GROQ_ENABLED', 'false'), FILTER_VALIDATE_BOOLEAN),
     'groq_api_key' => (string) $env('GROQ_API_KEY', ''),
     'groq_model' => (string) $env('GROQ_MODEL', 'llama-3.1-8b-instant'),
     'admin_ids' => $csv($env('ADMIN_IDS', '')),

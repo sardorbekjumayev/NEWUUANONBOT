@@ -7,10 +7,10 @@ namespace PUAnonymous;
 final class AI
 {
     public function __construct(
-        private readonly bool $enabled,
-        private readonly string $provider,
+        private readonly bool $geminiEnabled,
         private readonly string $geminiApiKey,
         private readonly string $geminiModel,
+        private readonly bool $groqEnabled,
         private readonly string $groqApiKey,
         private readonly string $groqModel,
     ) {
@@ -18,7 +18,7 @@ final class AI
 
     public function classifyText(string $content): array
     {
-        if (!$this->enabled || $this->provider === 'off') {
+        if (!$this->geminiEnabled && !$this->groqEnabled) {
             return ['decision' => 'allow', 'category' => 'safe', 'disabled' => true];
         }
 
@@ -27,11 +27,11 @@ final class AI
             return $local;
         }
 
-        if ($this->provider === 'groq') {
-            return $this->classifyWithGroq($content);
+        if ($this->geminiEnabled) {
+            return $this->classifyWithGemini($content);
         }
 
-        return $this->classifyWithGemini($content);
+        return $this->classifyWithGroq($content);
     }
 
     private function classifyWithGemini(string $content): array

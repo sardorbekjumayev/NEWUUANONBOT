@@ -889,15 +889,21 @@ final class Bot
         }
 
         $action = substr((string) ($callback['data'] ?? ''), 8);
-        if ($action === 'off') {
-            $this->updateEnvValues(['AI_ENABLED' => 'false', 'AI_PROVIDER' => 'off']);
-            $this->telegram->answerCallback($id, 'AI filter o\'chirildi.');
-        } elseif ($action === 'gemini') {
-            $this->updateEnvValues(['AI_ENABLED' => 'true', 'AI_PROVIDER' => 'gemini']);
-            $this->telegram->answerCallback($id, 'Gemini yoqildi.');
-        } elseif ($action === 'groq') {
-            $this->updateEnvValues(['AI_ENABLED' => 'true', 'AI_PROVIDER' => 'groq']);
-            $this->telegram->answerCallback($id, 'Groq yoqildi.');
+        if ($action === 'alloff') {
+            $this->updateEnvValues(['GEMINI_ENABLED' => 'false', 'GROQ_ENABLED' => 'false']);
+            $this->telegram->answerCallback($id, 'Ikkala AI ham o\'chirildi.');
+        } elseif ($action === 'gemini_on') {
+            $this->updateEnvValues(['GEMINI_ENABLED' => 'true', 'GROQ_ENABLED' => 'false']);
+            $this->telegram->answerCallback($id, 'Gemini yoqildi, Groq o\'chirildi.');
+        } elseif ($action === 'gemini_off') {
+            $this->updateEnvValues(['GEMINI_ENABLED' => 'false']);
+            $this->telegram->answerCallback($id, 'Gemini o\'chirildi.');
+        } elseif ($action === 'groq_on') {
+            $this->updateEnvValues(['GEMINI_ENABLED' => 'false', 'GROQ_ENABLED' => 'true']);
+            $this->telegram->answerCallback($id, 'Groq yoqildi, Gemini o\'chirildi.');
+        } elseif ($action === 'groq_off') {
+            $this->updateEnvValues(['GROQ_ENABLED' => 'false']);
+            $this->telegram->answerCallback($id, 'Groq o\'chirildi.');
         } else {
             $this->telegram->answerCallback($id);
         }
@@ -915,31 +921,35 @@ final class Bot
 
     private function adminAiText(): string
     {
-        $enabled = $this->envValue('AI_ENABLED', $this->config['ai_enabled'] ? 'true' : 'false');
-        $provider = strtolower($this->envValue('AI_PROVIDER', (string) $this->config['ai_provider']));
-        if ($enabled !== 'true') {
-            $provider = 'off';
-        }
-
+        $geminiEnabled = $this->envBool('GEMINI_ENABLED', (bool) $this->config['gemini_enabled']);
+        $groqEnabled = $this->envBool('GROQ_ENABLED', (bool) $this->config['groq_enabled']);
         $geminiKey = $this->envValue('GEMINI_API_KEY', (string) $this->config['gemini_api_key']);
         $groqKey = $this->envValue('GROQ_API_KEY', (string) $this->config['groq_api_key']);
+        $active = $geminiEnabled ? 'Gemini' : ($groqEnabled ? 'Groq' : 'AI ishlamayapti');
 
         return "⚙️ <b>Admin AI sozlamalari</b>\n\n"
-            . "Holat: <b>" . ($provider === 'off' ? 'AI filter o\'chiq' : strtoupper($provider) . ' yoqilgan') . "</b>\n"
-            . "Gemini key: " . ($geminiKey === '' || str_contains($geminiKey, 'YOUR_') ? '❌ yo\'q' : '✅ bor') . "\n"
-            . "Groq key: " . ($groqKey === '' ? '❌ yo\'q' : '✅ bor') . "\n\n"
-            . "AI o\'chiq bo\'lsa matnli postlar filterdan o\'tmasdan kanalga chiqadi. Commentlar har doim AI siz yuboriladi.";
+            . "Faol holat: <b>{$active}</b>\n\n"
+            . "Gemini: " . ($geminiEnabled ? '✅ yoqilgan' : '❌ o\'chiq')
+            . " | key: " . ($geminiKey === '' || str_contains($geminiKey, 'YOUR_') ? '❌ yo\'q' : '✅ bor') . "\n"
+            . "Groq: " . ($groqEnabled ? '✅ yoqilgan' : '❌ o\'chiq')
+            . " | key: " . ($groqKey === '' ? '❌ yo\'q' : '✅ bor') . "\n\n"
+            . "Ikkalasi ham o\'chiq bo\'lsa AI umuman ishlamaydi. Bitta AI yoqilganda ikkinchisi avtomatik o\'chadi.";
     }
 
     private function adminAiKeyboard(): array
     {
+        $geminiEnabled = $this->envBool('GEMINI_ENABLED', (bool) $this->config['gemini_enabled']);
+        $groqEnabled = $this->envBool('GROQ_ENABLED', (bool) $this->config['groq_enabled']);
+
         return ['inline_keyboard' => [
             [
-                ['text' => '⛔ AI off', 'callback_data' => 'adminai:off'],
-                ['text' => 'Gemini', 'callback_data' => 'adminai:gemini'],
-                ['text' => 'Groq', 'callback_data' => 'adminai:groq'],
+                ['text' => $geminiEnabled ? '❌ Gemini off' : '✅ Gemini on', 'callback_data' => $geminiEnabled ? 'adminai:gemini_off' : 'adminai:gemini_on'],
             ],
             [
+                ['text' => $groqEnabled ? '❌ Groq off' : '✅ Groq on', 'callback_data' => $groqEnabled ? 'adminai:groq_off' : 'adminai:groq_on'],
+            ],
+            [
+                ['text' => '⛔ Hammasini o\'chirish', 'callback_data' => 'adminai:alloff'],
                 ['text' => '🔄 Refresh', 'callback_data' => 'adminai:refresh'],
             ],
         ]];
@@ -949,6 +959,11 @@ final class Bot
     {
         $value = $_ENV[$key] ?? getenv($key);
         return $value === false || $value === null ? $default : (string) $value;
+    }
+
+    private function envBool(string $key, bool $default): bool
+    {
+        return filter_var($this->envValue($key, $default ? 'true' : 'false'), FILTER_VALIDATE_BOOLEAN);
     }
 
     /**
