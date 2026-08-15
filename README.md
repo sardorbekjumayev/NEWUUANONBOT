@@ -14,13 +14,7 @@ No MySQL, PostgreSQL, SQLite, Redis, MongoDB, user table, message table, or admi
 6. Copy `.env.example` to `.env`.
 7. Fill `BOT_TOKEN`, `BOT_USERNAME`, `CHANNEL_ID`, `MODERATION_GROUP_ID`, `DISCUSSION_GROUP_ID`, `ADMIN_IDS`, `APP_SECRET`, and `WEBHOOK_SECRET`.
 8. Create a Gemini API key in Google AI Studio and set `GEMINI_API_KEY`.
-9. Install dependencies:
-
-```bash
-composer install --no-dev
-```
-
-10. Run locally for testing:
+9. Run locally for testing (no `vendor` or `composer install` needed, pure PHP):
 
 ```bash
 php -S 0.0.0.0:8080 -t .

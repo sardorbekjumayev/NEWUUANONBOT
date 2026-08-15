@@ -4,31 +4,34 @@ declare(strict_types=1);
 
 namespace PUAnonymous;
 
-use GuzzleHttp\Client;
-use GuzzleHttp\Exception\GuzzleException;
-
 final class Telegram
 {
-    private Client $client;
-
     public function __construct(private readonly string $token)
     {
-        $this->client = new Client([
-            'base_uri' => 'https://api.telegram.org/bot' . $this->token . '/',
-            'timeout' => 18,
-        ]);
     }
 
     public function call(string $method, array $params = []): array
     {
-        try {
-            $response = $this->client->post($method, ['json' => $params]);
-            $data = json_decode((string) $response->getBody(), true);
-        } catch (GuzzleException $e) {
-            Helpers::log('ERROR', 'Telegram API failed', ['method' => $method, 'error' => $e->getMessage()]);
+        $url = 'https://api.telegram.org/bot' . $this->token . '/' . $method;
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode($params),
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_TIMEOUT => 18,
+        ]);
+
+        $response = curl_exec($ch);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($response === false) {
+            Helpers::log('ERROR', 'Telegram API failed', ['method' => $method, 'error' => $error]);
             return ['ok' => false, 'description' => 'Telegram API failed'];
         }
 
+        $data = json_decode((string) $response, true);
         if (!is_array($data) || ($data['ok'] ?? false) !== true) {
             Helpers::log('ERROR', 'Telegram API failed', [
                 'method' => $method,

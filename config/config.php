@@ -2,17 +2,51 @@
 
 declare(strict_types=1);
 
-use Dotenv\Dotenv;
-
 $root = dirname(__DIR__);
 
-if (is_file($root . '/vendor/autoload.php')) {
-    require_once $root . '/vendor/autoload.php';
-}
+spl_autoload_register(static function (string $class) use ($root): void {
+    $prefix = 'PUAnonymous\\';
+    if (!str_starts_with($class, $prefix)) {
+        return;
+    }
+    $relativeClass = substr($class, strlen($prefix));
+    $file = $root . '/src/' . str_replace('\\', '/', $relativeClass) . '.php';
+    if (is_file($file)) {
+        require_once $file;
+    }
+});
 
-if (class_exists(Dotenv::class) && is_file($root . '/.env')) {
-    Dotenv::createImmutable($root)->safeLoad();
-}
+$loadEnv = static function (string $path): void {
+    if (!is_file($path)) {
+        return;
+    }
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if ($lines === false) {
+        return;
+    }
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '' || str_starts_with($line, '#')) {
+            continue;
+        }
+        $parts = explode('=', $line, 2);
+        if (count($parts) === 2) {
+            $key = trim($parts[0]);
+            $val = trim($parts[1]);
+            if ((str_starts_with($val, '"') && str_ends_with($val, '"')) ||
+                (str_starts_with($val, "'") && str_ends_with($val, "'"))) {
+                $val = substr($val, 1, -1);
+            }
+            if (!array_key_exists($key, $_SERVER) && !array_key_exists($key, $_ENV)) {
+                putenv("{$key}={$val}");
+                $_ENV[$key] = $val;
+                $_SERVER[$key] = $val;
+            }
+        }
+    }
+};
+
+$loadEnv($root . '/.env');
 
 $env = static fn (string $key, ?string $default = null): ?string => $_ENV[$key] ?? getenv($key) ?: $default;
 

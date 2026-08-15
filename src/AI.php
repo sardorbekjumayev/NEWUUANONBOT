@@ -4,21 +4,12 @@ declare(strict_types=1);
 
 namespace PUAnonymous;
 
-use GuzzleHttp\Client;
-use GuzzleHttp\Exception\GuzzleException;
-
 final class AI
 {
-    private Client $client;
-
     public function __construct(
         private readonly string $apiKey,
         private readonly string $model,
     ) {
-        $this->client = new Client([
-            'base_uri' => 'https://generativelanguage.googleapis.com/v1beta/',
-            'timeout' => 15,
-        ]);
     }
 
     public function classifyText(string $content): array
@@ -54,29 +45,38 @@ Do not explain your answer.
 Content:
 PROMPT;
 
-        try {
-            $response = $this->client->post(
-                'models/' . rawurlencode($this->model) . ':generateContent?key=' . rawurlencode($this->apiKey),
-                [
-                    'json' => [
-                        'contents' => [[
-                            'role' => 'user',
-                            'parts' => [['text' => $prompt . "\n" . $content]],
-                        ]],
-                        'generationConfig' => [
-                            'temperature' => 0,
-                            'maxOutputTokens' => 40,
-                            'responseMimeType' => 'application/json',
-                        ],
-                    ],
-                ]
-            );
-        } catch (GuzzleException $e) {
-            Helpers::log('ERROR', 'Gemini API failed', ['error' => $e->getMessage()]);
+        $url = 'https://generativelanguage.googleapis.com/v1beta/models/' . rawurlencode($this->model) . ':generateContent?key=' . rawurlencode($this->apiKey);
+        $payload = json_encode([
+            'contents' => [[
+                'role' => 'user',
+                'parts' => [['text' => $prompt . "\n" . $content]],
+            ]],
+            'generationConfig' => [
+                'temperature' => 0,
+                'maxOutputTokens' => 40,
+                'responseMimeType' => 'application/json',
+            ],
+        ]);
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $payload,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_TIMEOUT => 15,
+        ]);
+
+        $response = curl_exec($ch);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($response === false) {
+            Helpers::log('ERROR', 'Gemini API failed', ['error' => $error]);
             return ['decision' => 'review', 'category' => 'other', 'unavailable' => true];
         }
 
-        $data = json_decode((string) $response->getBody(), true);
+        $data = json_decode((string) $response, true);
         $text = (string) ($data['candidates'][0]['content']['parts'][0]['text'] ?? '');
         $json = json_decode(trim($text), true);
 
