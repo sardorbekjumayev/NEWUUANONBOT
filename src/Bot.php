@@ -294,8 +294,12 @@ final class Bot
             return;
         }
 
-        // Rule: Medias ALWAYS go to manual review queue without AI auto-publish
-        if ($content['type'] !== 'text') {
+        $matchedWords = $content['type'] === 'text' ? $this->findBadWords($textForAI) : [];
+
+        // Rule: local wordlist is checked before AI so known bad words are cheap and deterministic.
+        if ($matchedWords !== []) {
+            $ai = ['decision' => 'review', 'category' => 'wordlist', 'local_wordlist' => true];
+        } elseif ($content['type'] !== 'text') {
             $ai = ['decision' => 'review', 'category' => 'other', 'media' => true];
         } elseif (mb_strlen($textForAI) > (int) $this->config['max_text_length']) {
             $ai = ['decision' => 'review', 'category' => 'other'];
@@ -319,6 +323,8 @@ final class Bot
             'ai' => strtoupper((string) ($ai['decision'] ?? 'REVIEW')),
             'category' => strtoupper((string) ($ai['category'] ?? 'OTHER')),
             'unavailable' => !empty($ai['unavailable']),
+            'local_wordlist' => !empty($ai['local_wordlist']),
+            'matched_words' => $matchedWords,
         ];
 
         // Rule: If pure text and AI decision is ALLOW -> auto-publish directly without waiting for admin!
@@ -425,6 +431,11 @@ final class Bot
             return;
         }
 
+        if (str_starts_with($data, 'learnbad:')) {
+            $this->handleLearnBadWordCallback($callback, $message);
+            return;
+        }
+
         [$action, $sig] = array_pad(explode(':', $data, 2), 2, '');
         $messageId = (int) ($message['message_id'] ?? 0);
         if ($action === 'noop' && $this->verifyAction($action, $messageId, $sig)) {
@@ -432,7 +443,7 @@ final class Bot
             return;
         }
 
-        if (!in_array($action, ['approve', 'reject'], true) || !$this->verifyAction($action, $messageId, $sig)) {
+        if (!in_array($action, ['approve', 'reject', 'rejectfinal'], true) || !$this->verifyAction($action, $messageId, $sig)) {
             $this->telegram->answerCallback($id, 'Amal yaroqsiz yoki muddati o\'tgan.', true);
             return;
         }
@@ -444,6 +455,11 @@ final class Bot
         }
 
         if ($action === 'reject') {
+            $this->askRejectReason($callback, $message, $meta);
+            return;
+        }
+
+        if ($action === 'rejectfinal') {
             $meta['status'] = 'REJECTED';
             $this->updateModerationMessage($message, $meta, false);
             $this->telegram->answerCallback($id, 'Rad etildi.');
@@ -464,6 +480,77 @@ final class Bot
         $this->notifyOwnerPublished($meta, $channelMessageId);
         $this->telegram->answerCallback($id, 'Chop etildi.');
         Helpers::log('INFO', 'channel post published');
+    }
+
+    private function askRejectReason(array $callback, array $message, array $meta): void
+    {
+        $messageId = (int) ($message['message_id'] ?? 0);
+        $this->telegram->editReplyMarkup(
+            $this->config['moderation_group_id'],
+            $messageId,
+            $this->rejectReasonKeyboard($messageId, (string) ($meta['content'] ?? ''))
+        );
+        $this->telegram->answerCallback((string) ($callback['id'] ?? ''), 'Qaysi so\'z sabab rad qilindi?');
+    }
+
+    private function handleLearnBadWordCallback(array $callback, array $message): void
+    {
+        $id = (string) ($callback['id'] ?? '');
+        $data = (string) ($callback['data'] ?? '');
+        $messageId = (int) ($message['message_id'] ?? 0);
+        [, $index, $sig] = array_pad(explode(':', $data, 3), 3, '');
+
+        if (!ctype_digit($index) || !$this->verifyAction('learnbad:' . $index, $messageId, $sig)) {
+            $this->telegram->answerCallback($id, 'Amal yaroqsiz yoki muddati o\'tgan.', true);
+            return;
+        }
+
+        $meta = $this->readMeta($message);
+        if (($meta['status'] ?? '') !== 'WAITING') {
+            $this->telegram->answerCallback($id, 'Ushbu xabar allaqachon ko\'rib chiqilgan.', true);
+            return;
+        }
+
+        $candidates = $this->badWordCandidates((string) ($meta['content'] ?? ''));
+        $word = $candidates[(int) $index] ?? '';
+        if ($word === '') {
+            $this->telegram->answerCallback($id, 'So\'z topilmadi.', true);
+            return;
+        }
+
+        $this->appendBadWord($word);
+        $meta['status'] = 'REJECTED';
+        $meta['matched_words'] = array_values(array_unique(array_merge((array) ($meta['matched_words'] ?? []), [$word])));
+        $this->updateModerationMessage($message, $meta, false);
+        $this->notifyOwnerRejected($meta);
+        $this->telegram->answerCallback($id, 'Rad etildi va wordlistga qo\'shildi: ' . $word);
+        Helpers::log('INFO', 'moderation rejected and word learned');
+    }
+
+    private function rejectReasonKeyboard(int $messageId, string $content): array
+    {
+        $rows = [];
+        $row = [];
+        foreach ($this->badWordCandidates($content) as $index => $word) {
+            $row[] = [
+                'text' => '🚫 ' . mb_substr($word, 0, 24),
+                'callback_data' => 'learnbad:' . $index . ':' . $this->actionSig('learnbad:' . $index, $messageId),
+            ];
+            if (count($row) === 2) {
+                $rows[] = $row;
+                $row = [];
+            }
+        }
+        if ($row !== []) {
+            $rows[] = $row;
+        }
+
+        $rows[] = [[
+            'text' => '🚫 Faqat rad etish',
+            'callback_data' => 'rejectfinal:' . $this->actionSig('rejectfinal', $messageId),
+        ]];
+
+        return ['inline_keyboard' => $rows];
     }
 
     private function publishTextDirect(string $content, string $target, int $threadId): array
@@ -731,12 +818,18 @@ final class Bot
         };
         $aiLine = !empty($meta['unavailable'])
             ? "⚠️ AI unavailable\nManual review required"
+            : (!empty($meta['local_wordlist'])
+                ? '🚫 Wordlist: MATCH'
             : match ($meta['ai'] ?? 'REVIEW') {
                 'ALLOW' => '🤖 AI: SAFE',
                 'REJECT' => '🔴 AI suggested rejection',
                 default => '⚠️ AI: REVIEW',
-            };
+            });
         $content = trim((string) ($meta['content'] ?? ''));
+        $matchedWords = implode(', ', array_map(
+            static fn (string $word): string => htmlspecialchars($word, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+            (array) ($meta['matched_words'] ?? [])
+        ));
 
         return "🆕 Anonymous Submission\n\n"
             . ($content === '' ? '[media only]' : htmlspecialchars($content, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'))
@@ -746,7 +839,8 @@ final class Bot
             . "\nType: " . htmlspecialchars((string) ($meta['type'] ?? 'text'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
             . "\nTarget: " . htmlspecialchars((string) ($meta['target'] ?? 'post'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
             . "\nThread: " . (int) ($meta['thread'] ?? 0)
-            . "\nMedia: " . (int) ($meta['media_message'] ?? 0);
+            . "\nMedia: " . (int) ($meta['media_message'] ?? 0)
+            . "\nMatches: " . $matchedWords;
     }
 
     private function readMeta(array $message): array
@@ -758,9 +852,14 @@ final class Bot
         preg_match('~Target:\s*(\w+)~', $text, $target);
         preg_match('~Thread:\s*(\d+)~', $text, $thread);
         preg_match('~Media:\s*(\d+)~', $text, $media);
+        preg_match('~Matches:\s*(.*)~u', $text, $matches);
 
         $contentBlock = trim((string) preg_replace('~^🆕 Anonymous Submission\s*|\n\n(?:🤖|⚠️|🔴).*~us', '', $text));
         $contentBlock = $contentBlock === '[media only]' ? '' : html_entity_decode($contentBlock, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $matchedWords = array_values(array_filter(array_map(
+            static fn (string $word): string => trim(html_entity_decode($word, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')),
+            explode(',', (string) ($matches[1] ?? ''))
+        )));
 
         return [
             'status' => str_contains($status[1] ?? '', 'Published') ? 'PUBLISHED' : (str_contains($status[1] ?? '', 'Rejected') ? 'REJECTED' : 'WAITING'),
@@ -772,6 +871,8 @@ final class Bot
             'content' => $contentBlock,
             'ai' => 'REVIEW',
             'category' => 'OTHER',
+            'local_wordlist' => str_contains($text, 'Wordlist: MATCH'),
+            'matched_words' => $matchedWords,
         ];
     }
 
