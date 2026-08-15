@@ -568,29 +568,49 @@ final class Bot
 
     private function privateChannelReplyTargetId(array $message): int
     {
+        $directExternalReply = $this->channelOriginMessageId($message['external_reply'] ?? null);
+        if ($directExternalReply > 0) {
+            return $directExternalReply;
+        }
+
         $reply = $message['reply_to_message'] ?? null;
         if (!is_array($reply)) {
             return 0;
         }
 
-        $channelId = (string) ($this->config['channel_id'] ?? '');
-        if ($channelId === '') {
-            return 0;
+        $nestedExternalReply = $this->channelOriginMessageId($reply['external_reply'] ?? null);
+        if ($nestedExternalReply > 0) {
+            return $nestedExternalReply;
         }
 
-        if ((string) ($reply['forward_from_chat']['id'] ?? '') === $channelId) {
+        if ($this->isConfiguredChannel($reply['forward_from_chat'] ?? null)) {
             return (int) ($reply['forward_from_message_id'] ?? 0);
         }
 
-        $origin = $reply['forward_origin'] ?? null;
-        if (is_array($origin)
-            && ($origin['type'] ?? '') === 'channel'
-            && (string) ($origin['chat']['id'] ?? '') === $channelId
-        ) {
-            return (int) ($origin['message_id'] ?? 0);
+        return $this->channelOriginMessageId($reply['forward_origin'] ?? null);
+    }
+
+    private function channelOriginMessageId(mixed $originContainer): int
+    {
+        if (!is_array($originContainer)) {
+            return 0;
         }
 
-        return 0;
+        $origin = $originContainer['origin'] ?? $originContainer;
+        if (!is_array($origin)
+            || ($origin['type'] ?? '') !== 'channel'
+            || !$this->isConfiguredChannel($origin['chat'] ?? null)
+        ) {
+            return 0;
+        }
+
+        return (int) ($origin['message_id'] ?? 0);
+    }
+
+    private function isConfiguredChannel(mixed $chat): bool
+    {
+        return is_array($chat)
+            && (string) ($chat['id'] ?? '') === (string) ($this->config['channel_id'] ?? '');
     }
 
     private function resolveDiscussionReplyTargetId(array $reply): int
