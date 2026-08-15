@@ -82,6 +82,18 @@ final class Bot
             return;
         }
 
+        if ($text === '/admin') {
+            if (!$this->isAdmin((string) ($message['from']['id'] ?? ''))) {
+                $this->telegram->sendMessage($chatId, '⛔ Bu bo\'lim faqat adminlar uchun.');
+                return;
+            }
+
+            $this->telegram->sendMessage($chatId, $this->adminAiText(), [
+                'reply_markup' => $this->adminAiKeyboard(),
+            ]);
+            return;
+        }
+
         if ($text === '/help' || $text === '❓ Yordam') {
             $this->sendHelp($chatId);
             return;
@@ -399,6 +411,11 @@ final class Bot
 
         if (str_starts_with($data, 'delw:') || str_starts_with($data, 'delp:') || str_starts_with($data, 'del:')) {
             $this->deleteOwnPost($callback);
+            return;
+        }
+
+        if (str_starts_with($data, 'adminai:')) {
+            $this->handleAdminAiCallback($callback);
             return;
         }
 
@@ -860,6 +877,116 @@ final class Bot
     private function sendHelp(string $chatId): void
     {
         $this->telegram->sendMessage($chatId, "❓ Qanday ishlaydi\n\n1. Xabaringizni yuboring.\n2. Matnlar AI orqali avtomatik joylanadi.\n3. Medialar adminlar tomonidan tekshiriladi.\n4. Qabul qilinsa anonim nashr etiladi.\n\nSiz kanal postlariga ham anonim izoh qoldirishingiz mumkin.\n\n🔒 Shaxsingiz mutlaqo oshkor etilmaydi.");
+    }
+
+    private function handleAdminAiCallback(array $callback): void
+    {
+        $id = (string) ($callback['id'] ?? '');
+        $fromId = (string) ($callback['from']['id'] ?? '');
+        if (!$this->isAdmin($fromId)) {
+            $this->telegram->answerCallback($id, '⛔ Siz admin emassiz.', true);
+            return;
+        }
+
+        $action = substr((string) ($callback['data'] ?? ''), 8);
+        if ($action === 'off') {
+            $this->updateEnvValues(['AI_ENABLED' => 'false', 'AI_PROVIDER' => 'off']);
+            $this->telegram->answerCallback($id, 'AI filter o\'chirildi.');
+        } elseif ($action === 'gemini') {
+            $this->updateEnvValues(['AI_ENABLED' => 'true', 'AI_PROVIDER' => 'gemini']);
+            $this->telegram->answerCallback($id, 'Gemini yoqildi.');
+        } elseif ($action === 'groq') {
+            $this->updateEnvValues(['AI_ENABLED' => 'true', 'AI_PROVIDER' => 'groq']);
+            $this->telegram->answerCallback($id, 'Groq yoqildi.');
+        } else {
+            $this->telegram->answerCallback($id);
+        }
+
+        $message = $callback['message'] ?? [];
+        if (is_array($message) && isset($message['chat']['id'], $message['message_id'])) {
+            $this->telegram->editMessageText(
+                $message['chat']['id'],
+                (int) $message['message_id'],
+                $this->adminAiText(),
+                ['reply_markup' => $this->adminAiKeyboard()]
+            );
+        }
+    }
+
+    private function adminAiText(): string
+    {
+        $enabled = $this->envValue('AI_ENABLED', $this->config['ai_enabled'] ? 'true' : 'false');
+        $provider = strtolower($this->envValue('AI_PROVIDER', (string) $this->config['ai_provider']));
+        if ($enabled !== 'true') {
+            $provider = 'off';
+        }
+
+        $geminiKey = $this->envValue('GEMINI_API_KEY', (string) $this->config['gemini_api_key']);
+        $groqKey = $this->envValue('GROQ_API_KEY', (string) $this->config['groq_api_key']);
+
+        return "⚙️ <b>Admin AI sozlamalari</b>\n\n"
+            . "Holat: <b>" . ($provider === 'off' ? 'AI filter o\'chiq' : strtoupper($provider) . ' yoqilgan') . "</b>\n"
+            . "Gemini key: " . ($geminiKey === '' || str_contains($geminiKey, 'YOUR_') ? '❌ yo\'q' : '✅ bor') . "\n"
+            . "Groq key: " . ($groqKey === '' ? '❌ yo\'q' : '✅ bor') . "\n\n"
+            . "AI o\'chiq bo\'lsa matnli postlar filterdan o\'tmasdan kanalga chiqadi. Commentlar har doim AI siz yuboriladi.";
+    }
+
+    private function adminAiKeyboard(): array
+    {
+        return ['inline_keyboard' => [
+            [
+                ['text' => '⛔ AI off', 'callback_data' => 'adminai:off'],
+                ['text' => 'Gemini', 'callback_data' => 'adminai:gemini'],
+                ['text' => 'Groq', 'callback_data' => 'adminai:groq'],
+            ],
+            [
+                ['text' => '🔄 Refresh', 'callback_data' => 'adminai:refresh'],
+            ],
+        ]];
+    }
+
+    private function envValue(string $key, string $default = ''): string
+    {
+        $value = $_ENV[$key] ?? getenv($key);
+        return $value === false || $value === null ? $default : (string) $value;
+    }
+
+    /**
+     * Admin toggles are stored in .env; this is lightweight config, not user/message storage.
+     *
+     * @param array<string, string> $values
+     */
+    private function updateEnvValues(array $values): void
+    {
+        $path = dirname(__DIR__) . '/.env';
+        $lines = is_file($path) ? file($path, FILE_IGNORE_NEW_LINES) : [];
+        if ($lines === false) {
+            $lines = [];
+        }
+
+        $seen = [];
+        foreach ($lines as $index => $line) {
+            if (!str_contains((string) $line, '=')) {
+                continue;
+            }
+            [$key] = explode('=', (string) $line, 2);
+            $key = trim($key);
+            if (array_key_exists($key, $values)) {
+                $lines[$index] = $key . '=' . $values[$key];
+                $seen[$key] = true;
+            }
+        }
+
+        foreach ($values as $key => $value) {
+            if (!isset($seen[$key])) {
+                $lines[] = $key . '=' . $value;
+            }
+            putenv($key . '=' . $value);
+            $_ENV[$key] = $value;
+            $_SERVER[$key] = $value;
+        }
+
+        file_put_contents($path, implode("\n", $lines) . "\n", LOCK_EX);
     }
 
     private function shortError(array $result): string

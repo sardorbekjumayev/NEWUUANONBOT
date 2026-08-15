@@ -59,7 +59,14 @@ if (($config['bot_token'] ?? '') === '' || ($config['app_secret'] ?? '') === '')
 $bot = new Bot(
     $config,
     new Telegram($config['bot_token']),
-    new AI($config['gemini_api_key'], $config['gemini_model'])
+    new AI(
+        $config['ai_enabled'],
+        $config['ai_provider'],
+        $config['gemini_api_key'],
+        $config['gemini_model'],
+        $config['groq_api_key'],
+        $config['groq_model']
+    )
 );
 
 $bot->handle($update);
