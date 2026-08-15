@@ -11,25 +11,25 @@ final class Bot
     /** @var array<int, int> */
     private static array $seenUpdates = [];
 
+    private readonly AdminManager $adminManager;
+    private readonly Wordlist $wordlist;
+
     public function __construct(
         private readonly array $config,
         private readonly Telegram $telegram,
         private readonly AI $ai,
+        ?AdminManager $adminManager = null,
+        ?Wordlist $wordlist = null,
     ) {
+        $this->adminManager = $adminManager ?? new AdminManager();
+        $this->wordlist = $wordlist ?? new Wordlist();
     }
 
     public function handle(array $update): void
     {
         $updateId = (int) ($update['update_id'] ?? 0);
-        if ($updateId > 0) {
-            if (isset(self::$seenUpdates[$updateId])) {
-                return;
-            }
-            self::$seenUpdates[$updateId] = time();
-            if (count(self::$seenUpdates) > 200) {
-                asort(self::$seenUpdates);
-                self::$seenUpdates = array_slice(self::$seenUpdates, -100, null, true);
-            }
+        if ($this->isDuplicateUpdate($updateId)) {
+            return;
         }
 
         if (isset($update['callback_query'])) {
@@ -76,31 +76,95 @@ final class Bot
                 $chatId,
                 "👋 <b>PU Anonymous botiga xush kelibsiz!</b>\n\nXabaringizni yuboring. Matnli xabarlar AI orqali tekshirilib, avtomatik kanalga joylanadi. Medialar esa moderatsiyadan o'tadi.\n\n🔒 Shaxsingiz mutlaqo anonim saqlanadi.",
                 [
-                    'reply_markup' => ['inline_keyboard' => [[['text' => '❓ Yordam', 'callback_data' => 'help']]]],
+                    'reply_markup' => [
+                        'inline_keyboard' => [
+                            [
+                                ['text' => '📜 Qoidalar', 'callback_data' => 'rules'],
+                                ['text' => '❓ Yordam', 'callback_data' => 'help'],
+                            ],
+                            [
+                                ['text' => '🛑 To\'xtatish / Reset', 'callback_data' => 'stop'],
+                            ]
+                        ]
+                    ],
                 ]
             );
             return;
         }
 
-        if ($text === '/admin') {
+        if (str_starts_with($text, '/admin')) {
             if (!$this->isAdmin((string) ($message['from']['id'] ?? ''))) {
                 $this->telegram->sendMessage($chatId, '⛔ Bu bo\'lim faqat adminlar uchun.');
                 return;
             }
 
-            $this->telegram->sendMessage($chatId, $this->adminAiText(), [
-                'reply_markup' => $this->adminAiKeyboard(),
+            $this->telegram->sendMessage($chatId, $this->adminMainText(), [
+                'reply_markup' => $this->adminMainKeyboard(),
             ]);
+            return;
+        }
+
+        if (str_starts_with($text, '/addadmin ')) {
+            if (!$this->isAdmin((string) ($message['from']['id'] ?? ''))) {
+                return;
+            }
+            $newId = trim(substr($text, 10));
+            if ($this->adminManager->addAdmin($newId, $this->config['admin_ids'] ?? [])) {
+                $this->telegram->sendMessage($chatId, "✅ Yangi admin qo'shildi: {$newId}");
+            } else {
+                $this->telegram->sendMessage($chatId, "❌ Noto'g'ri Telegram ID.");
+            }
+            return;
+        }
+
+        if (str_starts_with($text, '/deladmin ')) {
+            if (!$this->isAdmin((string) ($message['from']['id'] ?? ''))) {
+                return;
+            }
+            $targetId = trim(substr($text, 10));
+            $this->adminManager->removeAdmin($targetId, $this->config['admin_ids'] ?? []);
+            $this->telegram->sendMessage($chatId, "🗑 Admin olib tashlandi: {$targetId}");
+            return;
+        }
+
+        if (str_starts_with($text, '/addword ')) {
+            if (!$this->isAdmin((string) ($message['from']['id'] ?? ''))) {
+                return;
+            }
+            $word = trim(substr($text, 9));
+            if ($this->wordlist->add($word)) {
+                $this->telegram->sendMessage($chatId, "✅ Wordlistga qo'shildi: {$word}");
+            } else {
+                $this->telegram->sendMessage($chatId, "❌ So'z kiritilmadi.");
+            }
+            return;
+        }
+
+        if (str_starts_with($text, '/delword ')) {
+            if (!$this->isAdmin((string) ($message['from']['id'] ?? ''))) {
+                return;
+            }
+            $word = trim(substr($text, 9));
+            if ($this->wordlist->delete($word)) {
+                $this->telegram->sendMessage($chatId, "🗑 Wordlistdan o'chirildi: {$word}");
+            } else {
+                $this->telegram->sendMessage($chatId, "❌ So'z topilmadi.");
+            }
+            return;
+        }
+
+        if ($text === '/rules' || $text === '📜 Qoidalar') {
+            $this->sendRules($chatId);
+            return;
+        }
+
+        if ($text === '/stop' || $text === '/cancel' || $text === '🛑 To\'xtatish') {
+            $this->stopAndReset($chatId, (string) ($message['from']['id'] ?? ''));
             return;
         }
 
         if ($text === '/help' || $text === '❓ Yordam') {
             $this->sendHelp($chatId);
-            return;
-        }
-
-        if ($text === '/cancel') {
-            $this->telegram->sendMessage($chatId, 'Bekor qilindi.');
             return;
         }
 
@@ -411,13 +475,40 @@ final class Bot
             return;
         }
 
+        if ($data === 'rules') {
+            $this->telegram->answerCallback($id);
+            $this->sendRules((string) ($callback['message']['chat']['id'] ?? $fromId));
+            return;
+        }
+
+        if ($data === 'stop') {
+            $this->telegram->answerCallback($id, 'To\'xtatildi');
+            $this->stopAndReset((string) ($callback['message']['chat']['id'] ?? $fromId), $fromId);
+            return;
+        }
+
         if (str_starts_with($data, 'delw:') || str_starts_with($data, 'delp:') || str_starts_with($data, 'del:')) {
             $this->deleteOwnPost($callback);
             return;
         }
 
+        if (str_starts_with($data, 'adminmenu:')) {
+            $this->handleAdminMenuCallback($callback);
+            return;
+        }
+
         if (str_starts_with($data, 'adminai:')) {
             $this->handleAdminAiCallback($callback);
+            return;
+        }
+
+        if (str_starts_with($data, 'adminadm:')) {
+            $this->handleAdminAdminsCallback($callback);
+            return;
+        }
+
+        if (str_starts_with($data, 'adminwl:')) {
+            $this->handleAdminWordlistCallback($callback);
             return;
         }
 
@@ -1058,7 +1149,138 @@ final class Bot
 
     private function sendHelp(string $chatId): void
     {
-        $this->telegram->sendMessage($chatId, "❓ Qanday ishlaydi\n\n1. Xabaringizni yuboring.\n2. Matnlar AI orqali avtomatik joylanadi.\n3. Medialar adminlar tomonidan tekshiriladi.\n4. Qabul qilinsa anonim nashr etiladi.\n\nSiz kanal postlariga ham anonim izoh qoldirishingiz mumkin.\n\n🔒 Shaxsingiz mutlaqo oshkor etilmaydi.");
+        $this->telegram->sendMessage($chatId, "❓ <b>Qanday ishlaydi</b>\n\n1. Xabaringizni yuboring.\n2. Matnlar AI orqali avtomatik joylanadi.\n3. Medialar adminlar tomonidan tekshiriladi.\n4. Qabul qilinsa anonim nashr etiladi.\n\nSiz kanal postlariga ham anonim izoh qoldirishingiz mumkin.\n\n🔒 Shaxsingiz mutlaqo oshkor etilmaydi.", [
+            'reply_markup' => [
+                'inline_keyboard' => [
+                    [
+                        ['text' => '📜 Qoidalar', 'callback_data' => 'rules'],
+                        ['text' => '🛑 To\'xtatish', 'callback_data' => 'stop'],
+                    ]
+                ]
+            ]
+        ]);
+    }
+
+    private function sendRules(string $chatId): void
+    {
+        $text = "📜 <b>PU Anonymous Bot Qoidalari</b>\n\n"
+            . "✅ <b>Mumkin bo'lgan amallar:</b>\n"
+            . "• Universitet va talabalar hayotiga oid savollar va muhokamalar\n"
+            . "• Fikr-mulohazalar, takliflar va erkin fikr bildirish\n"
+            . "• Kanal postlariga anonim izoh qoldirish\n"
+            . "• Odob doirasidagi hazillar va memlar\n\n"
+            . "🚫 <b>Taqiqlangan amallar:</b>\n"
+            . "• Reklama, tijorat, promo-kod va sotuv e'lonlari\n"
+            . "• Behabar/harom/so'kinish so'zlari, behayo kontent\n"
+            . "• Shaxsiy ma'lumotlarni tarqatish (doxxing, telefon, pasport)\n"
+            . "• Kimgadir nisbatan shaxsiy adovat, tuhmat va haqorat\n"
+            . "• Spam, firibgarlik va shubhali havolalar\n\n"
+            . "🔒 <i>Shaxsingiz mutlaqo anonim saqlanadi. Qoidalarga amal qilishingizni so'raymiz!</i>";
+
+        $this->telegram->sendMessage($chatId, $text, [
+            'reply_markup' => [
+                'inline_keyboard' => [
+                    [
+                        ['text' => '❓ Yordam', 'callback_data' => 'help'],
+                        ['text' => '🛑 To\'xtatish', 'callback_data' => 'stop'],
+                    ]
+                ]
+            ]
+        ]);
+    }
+
+    private function stopAndReset(string $chatId, string $fromId): void
+    {
+        if ($fromId !== '') {
+            $key = hash_hmac('sha256', $fromId, $this->config['app_secret']);
+            unset(self::$rate[$key]);
+        }
+
+        $text = "🛑 <b>Barcha amallar to'xtatildi.</b>\n\nBot holati nolga qaytarildi. Agar bot loopga tushib qolgan bo'lsa yoki yangidan boshlamoqchi bo'lsangiz, endi bemalol yangi xabar yuborishingiz mumkin.";
+
+        $this->telegram->sendMessage($chatId, $text, [
+            'reply_markup' => [
+                'remove_keyboard' => true,
+            ]
+        ]);
+    }
+
+    private function findBadWords(string $text): array
+    {
+        return $this->wordlist->findMatches($text);
+    }
+
+    private function badWordCandidates(string $text): array
+    {
+        return $this->wordlist->candidates($text);
+    }
+
+    private function appendBadWord(string $word): void
+    {
+        $this->wordlist->add($word);
+    }
+
+    private function handleAdminMenuCallback(array $callback): void
+    {
+        $id = (string) ($callback['id'] ?? '');
+        $fromId = (string) ($callback['from']['id'] ?? '');
+        if (!$this->isAdmin($fromId)) {
+            $this->telegram->answerCallback($id, '⛔ Siz admin emassiz.', true);
+            return;
+        }
+
+        $this->telegram->answerCallback($id);
+        $message = $callback['message'] ?? [];
+        if (is_array($message) && isset($message['chat']['id'], $message['message_id'])) {
+            $this->telegram->editMessageText(
+                $message['chat']['id'],
+                (int) $message['message_id'],
+                $this->adminMainText(),
+                ['reply_markup' => $this->adminMainKeyboard()]
+            );
+        }
+    }
+
+    private function handleAdminAdminsCallback(array $callback): void
+    {
+        $id = (string) ($callback['id'] ?? '');
+        $fromId = (string) ($callback['from']['id'] ?? '');
+        if (!$this->isAdmin($fromId)) {
+            $this->telegram->answerCallback($id, '⛔ Siz admin emassiz.', true);
+            return;
+        }
+
+        $this->telegram->answerCallback($id);
+        $message = $callback['message'] ?? [];
+        if (is_array($message) && isset($message['chat']['id'], $message['message_id'])) {
+            $this->telegram->editMessageText(
+                $message['chat']['id'],
+                (int) $message['message_id'],
+                $this->adminAdminsText(),
+                ['reply_markup' => $this->adminAdminsKeyboard()]
+            );
+        }
+    }
+
+    private function handleAdminWordlistCallback(array $callback): void
+    {
+        $id = (string) ($callback['id'] ?? '');
+        $fromId = (string) ($callback['from']['id'] ?? '');
+        if (!$this->isAdmin($fromId)) {
+            $this->telegram->answerCallback($id, '⛔ Siz admin emassiz.', true);
+            return;
+        }
+
+        $this->telegram->answerCallback($id);
+        $message = $callback['message'] ?? [];
+        if (is_array($message) && isset($message['chat']['id'], $message['message_id'])) {
+            $this->telegram->editMessageText(
+                $message['chat']['id'],
+                (int) $message['message_id'],
+                $this->adminWordlistText(),
+                ['reply_markup' => $this->adminWordlistKeyboard()]
+            );
+        }
     }
 
     private function handleAdminAiCallback(array $callback): void
@@ -1072,19 +1294,19 @@ final class Bot
 
         $action = substr((string) ($callback['data'] ?? ''), 8);
         if ($action === 'alloff') {
-            $this->updateEnvValues(['GEMINI_ENABLED' => 'false', 'GROQ_ENABLED' => 'false']);
+            $this->adminManager->updateAiSettings(['gemini_enabled' => false, 'groq_enabled' => false]);
             $this->telegram->answerCallback($id, 'Ikkala AI ham o\'chirildi.');
         } elseif ($action === 'gemini_on') {
-            $this->updateEnvValues(['GEMINI_ENABLED' => 'true', 'GROQ_ENABLED' => 'false']);
+            $this->adminManager->updateAiSettings(['gemini_enabled' => true, 'groq_enabled' => false]);
             $this->telegram->answerCallback($id, 'Gemini yoqildi, Groq o\'chirildi.');
         } elseif ($action === 'gemini_off') {
-            $this->updateEnvValues(['GEMINI_ENABLED' => 'false']);
+            $this->adminManager->updateAiSettings(['gemini_enabled' => false]);
             $this->telegram->answerCallback($id, 'Gemini o\'chirildi.');
         } elseif ($action === 'groq_on') {
-            $this->updateEnvValues(['GEMINI_ENABLED' => 'false', 'GROQ_ENABLED' => 'true']);
+            $this->adminManager->updateAiSettings(['gemini_enabled' => false, 'groq_enabled' => true]);
             $this->telegram->answerCallback($id, 'Groq yoqildi, Gemini o\'chirildi.');
         } elseif ($action === 'groq_off') {
-            $this->updateEnvValues(['GROQ_ENABLED' => 'false']);
+            $this->adminManager->updateAiSettings(['groq_enabled' => false]);
             $this->telegram->answerCallback($id, 'Groq o\'chirildi.');
         } else {
             $this->telegram->answerCallback($id);
@@ -1101,12 +1323,48 @@ final class Bot
         }
     }
 
+    private function adminMainText(): string
+    {
+        $adminsCount = count($this->adminManager->getAdmins($this->config['admin_ids'] ?? []));
+        $wordsCount = count($this->wordlist->getAll());
+        $geminiEnabled = (bool) ($this->config['gemini_enabled'] ?? false);
+        $groqEnabled = (bool) ($this->config['groq_enabled'] ?? false);
+        $activeAi = $geminiEnabled ? 'Gemini' : ($groqEnabled ? 'Groq' : 'O\'chirilgan');
+
+        return "⚙️ <b>Admin Boshqaruvi Paneli</b>\n\n"
+            . "🤖 Active AI: <b>{$activeAi}</b>\n"
+            . "👥 Adminlar soni: <b>{$adminsCount}</b>\n"
+            . "📝 Wordlist so'zlar soni: <b>{$wordsCount}</b>\n\n"
+            . "Quyidagi tugmalar orqali sozlamalarni boshqaring yoki <b>Admin Web App</b>'ni oching:";
+    }
+
+    private function adminMainKeyboard(): array
+    {
+        $webhookUrl = (string) ($this->config['webhook_url'] ?? '');
+        $webAppUrl = str_contains($webhookUrl, 'index.php') 
+            ? rtrim($webhookUrl, '/') . '?app=admin'
+            : rtrim($webhookUrl, '/') . '/admin';
+
+        return ['inline_keyboard' => [
+            [
+                ['text' => '🌐 Admin Web App\'ni ochish', 'web_app' => ['url' => $webAppUrl]],
+            ],
+            [
+                ['text' => '🤖 AI Sozlamalari', 'callback_data' => 'adminai:menu'],
+                ['text' => '👥 Adminlar', 'callback_data' => 'adminadm:menu'],
+            ],
+            [
+                ['text' => '📝 Wordlist (Taqiq so\'zlar)', 'callback_data' => 'adminwl:menu'],
+            ],
+        ]];
+    }
+
     private function adminAiText(): string
     {
-        $geminiEnabled = $this->envBool('GEMINI_ENABLED', (bool) $this->config['gemini_enabled']);
-        $groqEnabled = $this->envBool('GROQ_ENABLED', (bool) $this->config['groq_enabled']);
-        $geminiKey = $this->envValue('GEMINI_API_KEY', (string) $this->config['gemini_api_key']);
-        $groqKey = $this->envValue('GROQ_API_KEY', (string) $this->config['groq_api_key']);
+        $geminiEnabled = (bool) ($this->config['gemini_enabled'] ?? false);
+        $groqEnabled = (bool) ($this->config['groq_enabled'] ?? false);
+        $geminiKey = (string) ($this->config['gemini_api_key'] ?? '');
+        $groqKey = (string) ($this->config['groq_api_key'] ?? '');
         $active = $geminiEnabled ? 'Gemini' : ($groqEnabled ? 'Groq' : 'AI ishlamayapti');
 
         return "⚙️ <b>Admin AI sozlamalari</b>\n\n"
@@ -1115,13 +1373,13 @@ final class Bot
             . " | key: " . ($geminiKey === '' || str_contains($geminiKey, 'YOUR_') ? '❌ yo\'q' : '✅ bor') . "\n"
             . "Groq: " . ($groqEnabled ? '✅ yoqilgan' : '❌ o\'chiq')
             . " | key: " . ($groqKey === '' ? '❌ yo\'q' : '✅ bor') . "\n\n"
-            . "Ikkalasi ham o\'chiq bo\'lsa AI umuman ishlamaydi. Bitta AI yoqilganda ikkinchisi avtomatik o\'chadi.";
+            . "API kalitlarni yangilash uchun Web App'dan foydalaning.";
     }
 
     private function adminAiKeyboard(): array
     {
-        $geminiEnabled = $this->envBool('GEMINI_ENABLED', (bool) $this->config['gemini_enabled']);
-        $groqEnabled = $this->envBool('GROQ_ENABLED', (bool) $this->config['groq_enabled']);
+        $geminiEnabled = (bool) ($this->config['gemini_enabled'] ?? false);
+        $groqEnabled = (bool) ($this->config['groq_enabled'] ?? false);
 
         return ['inline_keyboard' => [
             [
@@ -1132,58 +1390,52 @@ final class Bot
             ],
             [
                 ['text' => '⛔ Hammasini o\'chirish', 'callback_data' => 'adminai:alloff'],
-                ['text' => '🔄 Refresh', 'callback_data' => 'adminai:refresh'],
+                ['text' => '🔙 Orqaga', 'callback_data' => 'adminmenu:main'],
             ],
         ]];
     }
 
-    private function envValue(string $key, string $default = ''): string
+    private function adminAdminsText(): string
     {
-        $value = $_ENV[$key] ?? getenv($key);
-        return $value === false || $value === null ? $default : (string) $value;
+        $admins = $this->adminManager->getAdmins($this->config['admin_ids'] ?? []);
+        $list = implode("\n", array_map(static fn (string $id): string => '• <code>' . htmlspecialchars($id, ENT_QUOTES, 'UTF-8') . '</code>', $admins));
+
+        return "👥 <b>Adminlar Ro'yxati</b>\n\n"
+            . ($list === '' ? 'Adminlar yo\'q' : $list) . "\n\n"
+            . "➕ Admin qo'shish: <code>/addadmin TelegramID</code>\n"
+            . "➖ Admin o'chirish: <code>/deladmin TelegramID</code>";
     }
 
-    private function envBool(string $key, bool $default): bool
+    private function adminAdminsKeyboard(): array
     {
-        return filter_var($this->envValue($key, $default ? 'true' : 'false'), FILTER_VALIDATE_BOOLEAN);
+        return ['inline_keyboard' => [
+            [
+                ['text' => '🔙 Orqaga', 'callback_data' => 'adminmenu:main'],
+            ],
+        ]];
     }
 
-    /**
-     * Admin toggles are stored in .env; this is lightweight config, not user/message storage.
-     *
-     * @param array<string, string> $values
-     */
-    private function updateEnvValues(array $values): void
+    private function adminWordlistText(): string
     {
-        $path = dirname(__DIR__) . '/.env';
-        $lines = is_file($path) ? file($path, FILE_IGNORE_NEW_LINES) : [];
-        if ($lines === false) {
-            $lines = [];
-        }
+        $words = $this->wordlist->getAll();
+        $sample = array_slice($words, 0, 20);
+        $list = implode(", ", array_map(static fn (string $w): string => htmlspecialchars($w, ENT_QUOTES, 'UTF-8'), $sample));
+        $count = count($words);
 
-        $seen = [];
-        foreach ($lines as $index => $line) {
-            if (!str_contains((string) $line, '=')) {
-                continue;
-            }
-            [$key] = explode('=', (string) $line, 2);
-            $key = trim($key);
-            if (array_key_exists($key, $values)) {
-                $lines[$index] = $key . '=' . $values[$key];
-                $seen[$key] = true;
-            }
-        }
+        return "📝 <b>Wordlist (Taqiqlangan so'zlar)</b>\n\n"
+            . "Jami so'zlar soni: <b>{$count}</b>\n\n"
+            . "Namuna: " . ($list === '' ? 'So\'zlar yo\'q' : $list) . ($count > 20 ? '...' : '') . "\n\n"
+            . "➕ So'z qo'shish: <code>/addword soz</code>\n"
+            . "➖ So'z o'chirish: <code>/delword soz</code>";
+    }
 
-        foreach ($values as $key => $value) {
-            if (!isset($seen[$key])) {
-                $lines[] = $key . '=' . $value;
-            }
-            putenv($key . '=' . $value);
-            $_ENV[$key] = $value;
-            $_SERVER[$key] = $value;
-        }
-
-        file_put_contents($path, implode("\n", $lines) . "\n", LOCK_EX);
+    private function adminWordlistKeyboard(): array
+    {
+        return ['inline_keyboard' => [
+            [
+                ['text' => '🔙 Orqaga', 'callback_data' => 'adminmenu:main'],
+            ],
+        ]];
     }
 
     private function shortError(array $result): string
@@ -1210,6 +1462,48 @@ final class Bot
 
     private function isAdmin(string $telegramId): bool
     {
-        return in_array($telegramId, array_map('strval', $this->config['admin_ids']), true);
+        return $this->adminManager->isAdmin($telegramId, $this->config['admin_ids'] ?? []);
+    }
+
+    private function isDuplicateUpdate(int $updateId): bool
+    {
+        if ($updateId <= 0) {
+            return false;
+        }
+
+        if (isset(self::$seenUpdates[$updateId])) {
+            return true;
+        }
+
+        $file = dirname(__DIR__) . '/data/seen_updates.json';
+        $seen = [];
+        if (is_file($file)) {
+            $raw = file_get_contents($file);
+            $data = json_decode((string) $raw, true);
+            if (is_array($data)) {
+                $seen = $data;
+            }
+        }
+
+        if (isset($seen[(string) $updateId])) {
+            self::$seenUpdates[$updateId] = time();
+            return true;
+        }
+
+        $seen[(string) $updateId] = time();
+        self::$seenUpdates[$updateId] = time();
+
+        if (count($seen) > 300) {
+            asort($seen);
+            $seen = array_slice($seen, -150, null, true);
+        }
+
+        $dir = dirname($file);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+        @file_put_contents($file, json_encode($seen), LOCK_EX);
+
+        return false;
     }
 }

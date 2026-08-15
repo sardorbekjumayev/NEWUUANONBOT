@@ -59,7 +59,7 @@ $csv = static function (?string $value): array {
     )));
 };
 
-return [
+$baseConfig = [
     'bot_token' => (string) $env('BOT_TOKEN', ''),
     'bot_username' => ltrim((string) $env('BOT_USERNAME', ''), '@'),
     'channel_id' => (string) $env('CHANNEL_ID', ''),
@@ -80,3 +80,7 @@ return [
     'max_text_length' => max(100, (int) $env('MAX_TEXT_LENGTH', '3500')),
     'max_caption_length' => max(100, (int) $env('MAX_CAPTION_LENGTH', '600')),
 ];
+
+$adminManager = new \PUAnonymous\AdminManager();
+return $adminManager->getMergedConfig($baseConfig);
+

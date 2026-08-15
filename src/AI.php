@@ -72,33 +72,62 @@ final class AI
             return ['decision' => 'review', 'category' => 'other', 'unavailable' => true];
         }
 
-        $payload = json_encode([
-            'model' => $this->groqModel,
+        $prompt = $this->prompt() . "\n" . $content;
+        $headers = [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . $this->groqApiKey,
+        ];
+
+        // 1. Try Chat Completions endpoint first
+        $payloadChat = json_encode([
+            'model' => $this->groqModel ?: 'llama-3.1-8b-instant',
             'temperature' => 0,
-            'max_tokens' => 80,
+            'max_tokens' => 150,
             'response_format' => ['type' => 'json_object'],
             'messages' => [[
                 'role' => 'user',
-                'content' => $this->prompt() . "\n" . $content,
+                'content' => $prompt,
             ]],
         ]);
 
         $response = $this->postJson(
             'https://api.groq.com/openai/v1/chat/completions',
-            $payload,
-            [
-                'Content-Type: application/json',
-                'Authorization: Bearer ' . $this->groqApiKey,
-            ],
-            'Groq API failed'
+            $payloadChat,
+            $headers,
+            'Groq API chat completions failed'
         );
+
+        // 2. Fallback to Responses endpoint if chat completions fails or returns HTTP error
+        if ($response === null) {
+            $payloadResponses = json_encode([
+                'model' => $this->groqModel ?: 'openai/gpt-oss-20b',
+                'input' => $prompt,
+            ]);
+
+            $response = $this->postJson(
+                'https://api.groq.com/openai/v1/responses',
+                $payloadResponses,
+                $headers,
+                'Groq API responses failed'
+            );
+        }
 
         if ($response === null) {
             return ['decision' => 'review', 'category' => 'other', 'unavailable' => true];
         }
 
         $data = json_decode($response, true);
-        $text = (string) ($data['choices'][0]['message']['content'] ?? '');
+        if (!is_array($data)) {
+            return ['decision' => 'review', 'category' => 'other', 'unavailable' => true];
+        }
+
+        $text = (string) (
+            $data['choices'][0]['message']['content'] ??
+            $data['output_text'] ??
+            $data['output'][0]['content'][0]['text'] ??
+            $data['choices'][0]['text'] ??
+            ''
+        );
 
         return $this->normalizeAiJson($text, 'Groq response invalid');
     }
@@ -136,15 +165,21 @@ PROMPT;
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $payload,
             CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_TIMEOUT => 15,
+            CURLOPT_TIMEOUT => 6,
+            CURLOPT_CONNECTTIMEOUT => 3,
         ]);
 
         $response = curl_exec($ch);
         $error = curl_error($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
-        if ($response === false) {
-            Helpers::log('ERROR', $errorMessage, ['error' => $error]);
+        if ($response === false || $httpCode < 200 || $httpCode >= 300) {
+            Helpers::log('ERROR', $errorMessage, [
+                'http_code' => $httpCode,
+                'error' => $error,
+                'response' => is_string($response) ? mb_substr($response, 0, 200) : null
+            ]);
             return null;
         }
 
