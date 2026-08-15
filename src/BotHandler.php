@@ -51,6 +51,7 @@ class BotHandler {
         $msg = $update['message'];
         $chatId = (int)$msg['chat']['id'];
         $userId = (int)($msg['from']['id'] ?? $chatId);
+        $userMsgId = (int)($msg['message_id'] ?? 0);
         $text = trim($msg['text'] ?? $msg['caption'] ?? '');
         $chatType = $msg['chat']['type'] ?? 'private';
 
@@ -78,9 +79,25 @@ class BotHandler {
         // Check if user is in a state
         $stateData = $this->getUserState($userId);
 
+        // Handle comment cancel if /start or /cancel received while in wait_comment
+        if (!empty($stateData) && $stateData['action'] === 'wait_comment') {
+            if ($text === '/cancel' || str_starts_with($text, '/start')) {
+                $this->clearUserState($userId);
+                $this->bot->sendMessage($chatId, "❌ Reply cancelled.", null, 'HTML', true, $userMsgId);
+                return;
+            }
+            if (empty($text)) {
+                $this->bot->sendMessage($chatId, "⚠️ Please write text for your comment.");
+                return;
+            }
+            $this->processUserComment($chatId, $anonId, $text, (int)$stateData['submission_id'], $userMsgId);
+            $this->clearUserState($userId);
+            return;
+        }
+
         if ($text === '/cancel' || $text === '❌ Cancel' || $text === '❌ Bekor qilish') {
             $this->clearUserState($userId);
-            $this->sendMainMenu($chatId, "❌ Bekor qilindi.");
+            $this->sendMainMenu($chatId, "❌ Action cancelled.");
             return;
         }
 
@@ -108,32 +125,21 @@ class BotHandler {
             $this->setUserState($userId, ['action' => 'wait_message']);
             $this->bot->sendMessage(
                 $chatId,
-                "✍️ <b>Anonim xabaringizni yuboring</b> (matn, rasm yoki video):\n\n<i>Eslatma: Shaxsiy telefon raqamingiz yoki shaxsingizni oshkor qiluvchi ma'lumotlarni kiritmang.</i>",
+                "✍️ <b>Send your anonymous submission</b> (text, photo, or video):\n\n<i>Note: Do not include personal phone numbers or identity details.</i>",
                 $this->getCancelKeyboard()
             );
             return;
         }
 
-        // Handle Comment State
-        if (!empty($stateData) && $stateData['action'] === 'wait_comment') {
-            if (empty($text)) {
-                $this->bot->sendMessage($chatId, "⚠️ Iltimos, izohingiz uchun matn yozing.");
-                return;
-            }
-            $this->processUserComment($chatId, $anonId, $text, (int)$stateData['submission_id']);
-            $this->clearUserState($userId);
-            return;
-        }
-
         // DIRECT SUBMISSION: If user sends any text, photo, or video message, process it immediately!
         if (!empty($text) || $mediaFileId) {
-            $this->processUserSubmission($chatId, $anonId, $text, '📌 General', $mediaType, $mediaFileId);
+            $this->processUserSubmission($chatId, $anonId, $text, '📌 General', $mediaType, $mediaFileId, $userMsgId);
             $this->clearUserState($userId);
             return;
         }
 
         // Default Main Menu Response
-        $this->sendMainMenu($chatId, "👋 Xush kelibsiz! Quyidagi menyudan kerakli bo'limni tanlang:");
+        $this->sendMainMenu($chatId, "👋 Welcome! Please select an option from the menu below:");
     }
 
     private function handleStartCommand(int $chatId, int $userId, string $text, string $anonId): void {
@@ -236,16 +242,16 @@ class BotHandler {
         $this->bot->answerCallbackQuery($cbId);
     }
 
-    private function processUserSubmission(int $chatId, string $anonId, string $text, string $category, ?string $mediaType = null, ?string $mediaFileId = null): void {
+    private function processUserSubmission(int $chatId, string $anonId, string $text, string $category, ?string $mediaType = null, ?string $mediaFileId = null, ?int $userMsgId = null): void {
         // Rate limiting check
         if (!$this->rateLimiter->checkRateLimit($anonId, 'submission')) {
-            $this->bot->sendMessage($chatId, "⚠️ <b>Limit reached!</b> You have sent too many submissions in 10 minutes. Please try again later.");
+            $this->bot->sendMessage($chatId, "⚠️ <b>Limit reached!</b> You have sent too many submissions in 10 minutes. Please try again later.", null, 'HTML', true, $userMsgId);
             return;
         }
 
         // Duplicate check for text content
         if (!empty($text) && $this->rateLimiter->isDuplicate($text)) {
-            $this->bot->sendMessage($chatId, "⚠️ <b>Duplicate message!</b> This content was submitted recently. Please submit new content.");
+            $this->bot->sendMessage($chatId, "⚠️ <b>Duplicate message!</b> This content was submitted recently. Please submit new content.", null, 'HTML', true, $userMsgId);
             return;
         }
 
@@ -259,7 +265,7 @@ class BotHandler {
         $ownerToken = $this->anonymity->generateOwnerToken();
         $now = date('Y-m-d H:i:s');
 
-        $stmt = $this->db->prepare("INSERT INTO submissions (public_id, mod_id, anon_id, owner_token, category, content, sanitized_content, media_type, media_file_id, ai_status, ai_score, ai_reason, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)");
+        $stmt = $this->db->prepare("INSERT INTO submissions (public_id, mod_id, anon_id, owner_token, category, content, sanitized_content, media_type, media_file_id, ai_status, ai_score, ai_reason, status, user_dm_chat_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         $stmt->execute([
             $pubId,
             $modId,
@@ -273,6 +279,8 @@ class BotHandler {
             $aiEval['decision'],
             $aiEval['score'],
             $aiEval['reason'],
+            'pending',
+            $chatId,
             $now,
             $now
         ]);
@@ -295,18 +303,29 @@ class BotHandler {
         ];
         $this->moderationService->sendToModerationGroup($submission);
 
-        // Response to user
-        $responseText = "✅ <b>Xabaringiz qabul qilindi!</b>\n\n" .
-                        "Moderatorlar ko'rib chiqqach kanalda chop etiladi.\n\n" .
-                        "🆔 Submissiya kodi: <code>{$pubId}</code>\n" .
-                        "🔒 Shaxsingiz 100% maxfiy saqlanadi.";
+        // Response to user: Quoted reply + Delete button matching Screenshot 4!
+        $pubCode = str_replace('#', '', $pubId);
+        $keyboard = [
+            'inline_keyboard' => [
+                [
+                    ['text' => '🗑 Delete', 'callback_data' => 'del_' . $pubCode]
+                ]
+            ]
+        ];
 
-        $this->sendMainMenu($chatId, $responseText);
+        $responseText = "Your message is waiting for admin review before posting.";
+        $replyRes = $this->bot->sendMessage($chatId, $responseText, $keyboard, 'HTML', true, $userMsgId);
+
+        if ($replyRes && isset($replyRes->result->message_id)) {
+            $userDmMsgId = (int)$replyRes->result->message_id;
+            $upd = $this->db->prepare("UPDATE submissions SET user_dm_message_id = ? WHERE id = ?");
+            $upd->execute([$userDmMsgId, $subId]);
+        }
     }
 
-    private function processUserComment(int $chatId, string $anonId, string $text, int $submissionId): void {
+    private function processUserComment(int $chatId, string $anonId, string $text, int $submissionId, ?int $userMsgId = null): void {
         if (!$this->rateLimiter->checkRateLimit($anonId, 'comment')) {
-            $this->bot->sendMessage($chatId, "⚠️ <b>Limit reached!</b> You have reached the comment limit for now.");
+            $this->bot->sendMessage($chatId, "⚠️ <b>Limit reached!</b> You have reached the comment limit for now.", null, 'HTML', true, $userMsgId);
             return;
         }
 
@@ -328,7 +347,7 @@ class BotHandler {
             date('Y-m-d H:i:s')
         ]);
 
-        $this->sendMainMenu($chatId, "✅ <b>Your comment was successfully sent!</b>");
+        $this->bot->sendMessage($chatId, "✅ <b>Your comment was sent!</b>", null, 'HTML', true, $userMsgId);
     }
 
     private function sendMySubmissions(int $chatId, string $anonId): void {
@@ -367,9 +386,9 @@ class BotHandler {
         $this->bot->sendMessage($chatId, $text, $keyboard);
     }
 
-    private function deleteSubmissionByOwner(int $chatId, string $anonId, string $publicId): void {
-        $stmt = $this->db->prepare("SELECT * FROM submissions WHERE public_id = ? AND anon_id = ?");
-        $stmt->execute([$publicId, $anonId]);
+    private function deleteSubmissionByOwner(int $chatId, string $anonId, string $publicId, ?int $dmMsgId = null): void {
+        $stmt = $this->db->prepare("SELECT * FROM submissions WHERE (public_id = ? OR public_id = ?) AND anon_id = ?");
+        $stmt->execute([$publicId, '#' . $publicId, $anonId]);
         $sub = $stmt->fetch();
 
         if (!$sub) {
@@ -386,7 +405,12 @@ class BotHandler {
         $upd = $this->db->prepare("UPDATE submissions SET status = 'deleted', updated_at = ? WHERE id = ?");
         $upd->execute([date('Y-m-d H:i:s'), $sub['id']]);
 
-        $this->bot->sendMessage($chatId, "✅ Submission <b>{$publicId}</b> has been successfully deleted.");
+        $targetDmMsgId = $dmMsgId ?? ($sub['user_dm_message_id'] ? (int)$sub['user_dm_message_id'] : null);
+        if ($targetDmMsgId) {
+            $this->bot->editMessageText($chatId, $targetDmMsgId, "❌ <i>Submission deleted.</i>");
+        } else {
+            $this->bot->sendMessage($chatId, "✅ Submission <b>{$publicId}</b> has been deleted.");
+        }
     }
 
     private function sendMainMenu(int $chatId, string $text): void {

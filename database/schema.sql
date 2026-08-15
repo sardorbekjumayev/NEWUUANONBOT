@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS submissions (
     status VARCHAR(30) DEFAULT 'pending',
     rejection_reason TEXT DEFAULT NULL,
     channel_message_id BIGINT DEFAULT NULL,
+    user_dm_chat_id BIGINT DEFAULT NULL,
+    user_dm_message_id BIGINT DEFAULT NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
     INDEX idx_public_id (public_id),

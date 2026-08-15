@@ -22,7 +22,7 @@ $db = Database::getConnection();
 $handler = new BotHandler();
 
 $testUserId = 998877661;
-$testMsgText = "men yangi campusda oqishni xoxlayman " . rand(1000, 9999);
+$testMsgText = "Yangi unikal test xabari " . bin2hex(random_bytes(6));
 
 // Simulate direct message webhook update from Telegram user
 $update = [

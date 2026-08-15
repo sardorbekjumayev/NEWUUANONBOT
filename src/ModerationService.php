@@ -115,6 +115,17 @@ class ModerationService {
                 }
                 $pubResult = $this->publisher->publishToChannel((int)$submission['id']);
 
+                // Notify user in DM (edit quoted reply message)
+                if (!empty($submission['user_dm_chat_id']) && !empty($submission['user_dm_message_id'])) {
+                    $pubCode = str_replace('#', '', $submission['public_id']);
+                    $this->bot->editMessageText(
+                        $submission['user_dm_chat_id'],
+                        (int)$submission['user_dm_message_id'],
+                        "Your message was sent to the channel!",
+                        ['inline_keyboard' => [[['text' => '🗑 Delete', 'callback_data' => 'del_' . $pubCode]]]]
+                    );
+                }
+
                 $this->bot->answerCallbackQuery($callbackId, "✅ Published to channel!");
                 $this->bot->editMessageText(
                     $chatId,
@@ -136,6 +147,15 @@ class ModerationService {
                 // Reject
                 $upd = $this->db->prepare("UPDATE submissions SET status = 'rejected', updated_at = ? WHERE id = ?");
                 $upd->execute([date('Y-m-d H:i:s'), $submission['id']]);
+
+                // Notify user in DM
+                if (!empty($submission['user_dm_chat_id']) && !empty($submission['user_dm_message_id'])) {
+                    $this->bot->editMessageText(
+                        $submission['user_dm_chat_id'],
+                        (int)$submission['user_dm_message_id'],
+                        "❌ Your message was rejected by moderators."
+                    );
+                }
 
                 $this->bot->answerCallbackQuery($callbackId, "❌ Submission rejected!");
                 $this->bot->editMessageText(

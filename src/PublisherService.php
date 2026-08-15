@@ -55,21 +55,12 @@ class PublisherService {
         $commentToken = $this->createDeepLinkToken($submissionId, 'comment');
         $deepLinkUrl = "https://t.me/" . $this->botUsername . "?start=comment_" . $commentToken;
 
-        $postText = sprintf(
-            "━━━━━━━━━━━━━━━━━━\n" .
-            "🗣 <b>Anonymous Student</b>\n\n" .
-            "%s\n\n" .
-            "<code>%s</code> | %s\n" .
-            "━━━━━━━━━━━━━━━━━━",
-            !empty($sub['sanitized_content']) ? "\"" . htmlspecialchars($sub['sanitized_content']) . "\"" : "",
-            htmlspecialchars($sub['public_id']),
-            htmlspecialchars($sub['category'])
-        );
+        $postText = !empty($sub['sanitized_content']) ? $sub['sanitized_content'] : "";
 
         $keyboard = [
             'inline_keyboard' => [
                 [
-                    ['text' => "💬 Leave Anonymous Comment", 'url' => $deepLinkUrl]
+                    ['text' => "✍️ Reply anonymously ↗", 'url' => $deepLinkUrl]
                 ]
             ]
         ];

@@ -46,13 +46,17 @@ class TelegramBot {
         return json_decode($result);
     }
 
-    public function sendMessage(int|string $chatId, string $text, mixed $replyMarkup = null, string $parseMode = 'HTML', bool $disableWebPagePreview = true): mixed {
+    public function sendMessage(int|string $chatId, string $text, mixed $replyMarkup = null, string $parseMode = 'HTML', bool $disableWebPagePreview = true, ?int $replyToMessageId = null): mixed {
         $data = [
             'chat_id' => $chatId,
             'text' => $text,
             'parse_mode' => $parseMode,
             'disable_web_page_preview' => $disableWebPagePreview ? 'true' : 'false'
         ];
+
+        if ($replyToMessageId !== null) {
+            $data['reply_to_message_id'] = $replyToMessageId;
+        }
 
         if ($replyMarkup !== null) {
             $data['reply_markup'] = is_string($replyMarkup) ? $replyMarkup : json_encode($replyMarkup);
@@ -91,13 +95,17 @@ class TelegramBot {
         ]);
     }
 
-    public function sendPhoto(int|string $chatId, string $photoFileId, string $caption = '', mixed $replyMarkup = null, string $parseMode = 'HTML'): mixed {
+    public function sendPhoto(int|string $chatId, string $photoFileId, string $caption = '', mixed $replyMarkup = null, string $parseMode = 'HTML', ?int $replyToMessageId = null): mixed {
         $data = [
             'chat_id' => $chatId,
             'photo' => $photoFileId,
             'caption' => $caption,
             'parse_mode' => $parseMode
         ];
+
+        if ($replyToMessageId !== null) {
+            $data['reply_to_message_id'] = $replyToMessageId;
+        }
 
         if ($replyMarkup !== null) {
             $data['reply_markup'] = is_string($replyMarkup) ? $replyMarkup : json_encode($replyMarkup);
@@ -106,13 +114,17 @@ class TelegramBot {
         return $this->call('sendPhoto', $data);
     }
 
-    public function sendVideo(int|string $chatId, string $videoFileId, string $caption = '', mixed $replyMarkup = null, string $parseMode = 'HTML'): mixed {
+    public function sendVideo(int|string $chatId, string $videoFileId, string $caption = '', mixed $replyMarkup = null, string $parseMode = 'HTML', ?int $replyToMessageId = null): mixed {
         $data = [
             'chat_id' => $chatId,
             'video' => $videoFileId,
             'caption' => $caption,
             'parse_mode' => $parseMode
         ];
+
+        if ($replyToMessageId !== null) {
+            $data['reply_to_message_id'] = $replyToMessageId;
+        }
 
         if ($replyMarkup !== null) {
             $data['reply_markup'] = is_string($replyMarkup) ? $replyMarkup : json_encode($replyMarkup);
