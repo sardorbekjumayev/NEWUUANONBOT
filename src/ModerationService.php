@@ -33,22 +33,26 @@ class ModerationService {
             return false;
         }
 
+        $flaggedCategory = $submission['flagged_category'] ?? null;
+        $flaggedStr = $flaggedCategory ? "\n⚠️ <b>AI Category:</b> " . htmlspecialchars($flaggedCategory) : "";
+
         $cardText = sprintf(
             "━━━━━━━━━━━━━━━━━━\n" .
-            "🛡 <b>ANONIM MODERATSIYA</b>\n" .
+            "🛡 <b>ANONYMOUS MODERATION</b>\n" .
             "━━━━━━━━━━━━━━━━━━\n\n" .
-            "🆔 <b>Xabar ID:</b> %s\n" .
-            "📚 <b>Kategoriya:</b> %s\n" .
-            "🤖 <b>AI Holati:</b> %s\n" .
-            "📊 <b>AI Ishonch:</b> %d%%\n\n" .
-            "📝 <b>Matn:</b>\n" .
+            "🆔 <b>Message ID:</b> %s\n" .
+            "📚 <b>Category:</b> %s\n" .
+            "🤖 <b>AI Status:</b> %s\n" .
+            "📊 <b>AI Confidence:</b> %d%%%s\n\n" .
+            "📝 <b>Content:</b>\n" .
             "<i>%s</i>\n" .
             "━━━━━━━━━━━━━━━━━━",
             htmlspecialchars($submission['mod_id']),
             htmlspecialchars($submission['category']),
             htmlspecialchars($submission['ai_status']),
             (int)($submission['ai_score'] * 100),
-            htmlspecialchars($submission['sanitized_content'])
+            $flaggedStr,
+            htmlspecialchars(!empty($submission['sanitized_content']) ? $submission['sanitized_content'] : '[' . strtoupper($submission['media_type'] ?? 'MEDIA') . ']')
         );
 
         $modId = str_replace('#', '', $submission['mod_id']);
@@ -56,20 +60,27 @@ class ModerationService {
         $keyboard = [
             'inline_keyboard' => [
                 [
-                    ['text' => "✅ Tasdiqlash", 'callback_data' => "mod_app_" . $modId],
-                    ['text' => "❌ Rad etish", 'callback_data' => "mod_rej_" . $modId]
+                    ['text' => "✅ Approve", 'callback_data' => "mod_app_" . $modId],
+                    ['text' => "❌ Reject", 'callback_data' => "mod_rej_" . $modId]
                 ],
                 [
-                    ['text' => "✏️ Tahrirlash", 'callback_data' => "mod_edt_" . $modId],
-                    ['text' => "🚫 Bloklash", 'callback_data' => "mod_ban_" . $modId]
-                ],
-                [
-                    ['text' => "🔍 AI Tahlil", 'callback_data' => "mod_ai_" . $modId]
+                    ['text' => "🚫 Ban Spam", 'callback_data' => "mod_ban_" . $modId],
+                    ['text' => "🔍 AI Details", 'callback_data' => "mod_ai_" . $modId]
                 ]
             ]
         ];
 
-        $res = $this->bot->sendMessage($this->moderationGroupId, $cardText, $keyboard);
+        $mediaType = $submission['media_type'] ?? null;
+        $mediaFileId = $submission['media_file_id'] ?? null;
+
+        if ($mediaType === 'photo' && $mediaFileId) {
+            $res = $this->bot->sendPhoto($this->moderationGroupId, $mediaFileId, $cardText, $keyboard);
+        } elseif ($mediaType === 'video' && $mediaFileId) {
+            $res = $this->bot->sendVideo($this->moderationGroupId, $mediaFileId, $cardText, $keyboard);
+        } else {
+            $res = $this->bot->sendMessage($this->moderationGroupId, $cardText, $keyboard);
+        }
+
         return isset($res->result->message_id);
     }
 
@@ -89,7 +100,7 @@ class ModerationService {
         $submission = $stmt->fetch();
 
         if (!$submission) {
-            $this->bot->answerCallbackQuery($callbackId, "❌ Xabar topilmadi!", true);
+            $this->bot->answerCallbackQuery($callbackId, "❌ Submission not found!", true);
             return false;
         }
 
@@ -102,20 +113,20 @@ class ModerationService {
                 if (!isset($this->publisher)) {
                     $this->publisher = new PublisherService($this->db, $this->bot);
                 }
-                $pubResult = $this->publisher->publishToChannel($submission['id']);
+                $pubResult = $this->publisher->publishToChannel((int)$submission['id']);
 
-                $this->bot->answerCallbackQuery($callbackId, "✅ Xabar kanalga chop etildi!");
+                $this->bot->answerCallbackQuery($callbackId, "✅ Published to channel!");
                 $this->bot->editMessageText(
                     $chatId,
                     $messageId,
                     sprintf(
                         "━━━━━━━━━━━━━━━━━━\n" .
-                        "✅ <b>TASDIQLANDI VA CHOP ETILDI</b>\n" .
+                        "✅ <b>APPROVED & PUBLISHED</b>\n" .
                         "━━━━━━━━━━━━━━━━━━\n\n" .
-                        "🆔 <b>Xabar ID:</b> %s\n" .
-                        "📝 <b>Matn:</b> %s",
+                        "🆔 <b>Message ID:</b> %s\n" .
+                        "📝 <b>Content:</b> %s",
                         htmlspecialchars($submission['mod_id']),
-                        htmlspecialchars($submission['sanitized_content'])
+                        htmlspecialchars(!empty($submission['sanitized_content']) ? $submission['sanitized_content'] : '[' . strtoupper($submission['media_type'] ?? 'MEDIA') . ']')
                     )
                 );
                 $this->logAudit('Moderator', 'APPROVE_SUBMISSION', $submission['public_id']);
@@ -126,15 +137,15 @@ class ModerationService {
                 $upd = $this->db->prepare("UPDATE submissions SET status = 'rejected', updated_at = ? WHERE id = ?");
                 $upd->execute([date('Y-m-d H:i:s'), $submission['id']]);
 
-                $this->bot->answerCallbackQuery($callbackId, "❌ Xabar rad etildi!");
+                $this->bot->answerCallbackQuery($callbackId, "❌ Submission rejected!");
                 $this->bot->editMessageText(
                     $chatId,
                     $messageId,
                     sprintf(
                         "━━━━━━━━━━━━━━━━━━\n" .
-                        "❌ <b>RAD ETILDI</b>\n" .
+                        "❌ <b>REJECTED</b>\n" .
                         "━━━━━━━━━━━━━━━━━━\n\n" .
-                        "🆔 <b>Xabar ID:</b> %s",
+                        "🆔 <b>Message ID:</b> %s",
                         htmlspecialchars($submission['mod_id'])
                     )
                 );
@@ -146,11 +157,11 @@ class ModerationService {
                 $upd = $this->db->prepare("UPDATE submissions SET status = 'spam', updated_at = ? WHERE id = ?");
                 $upd->execute([date('Y-m-d H:i:s'), $submission['id']]);
 
-                $this->bot->answerCallbackQuery($callbackId, "🚫 Xabar spamlarga qo'shildi!", true);
+                $this->bot->answerCallbackQuery($callbackId, "🚫 Marked as spam!", true);
                 $this->bot->editMessageText(
                     $chatId,
                     $messageId,
-                    "🚫 <b>SPAM SIFATIDA BLOKLANDI:</b> " . htmlspecialchars($submission['mod_id'])
+                    "🚫 <b>BLOCKED AS SPAM:</b> " . htmlspecialchars($submission['mod_id'])
                 );
                 $this->logAudit('Moderator', 'BAN_SUBMISSION', $submission['public_id']);
                 return true;
@@ -158,13 +169,13 @@ class ModerationService {
             case 'ai':
                 // AI Detailed Info
                 $aiInfo = sprintf(
-                    "🤖 <b>AI Tahlili:</b>\n\n" .
-                    "• Holat: %s\n" .
-                    "• Score: %d%%\n" .
-                    "• Sabab: %s",
+                    "🤖 <b>AI Evaluation:</b>\n\n" .
+                    "• Status: %s\n" .
+                    "• Confidence: %d%%\n" .
+                    "• Reason: %s",
                     htmlspecialchars($submission['ai_status']),
                     (int)($submission['ai_score'] * 100),
-                    htmlspecialchars($submission['ai_reason'] ?? 'Sabab ko\'rsatilmadi')
+                    htmlspecialchars($submission['ai_reason'] ?? 'No explanation provided')
                 );
                 $this->bot->answerCallbackQuery($callbackId, $aiInfo, true);
                 return true;

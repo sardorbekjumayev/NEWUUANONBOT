@@ -90,4 +90,60 @@ class TelegramBot {
             'show_alert' => $showAlert ? 'true' : 'false'
         ]);
     }
+
+    public function sendPhoto(int|string $chatId, string $photoFileId, string $caption = '', mixed $replyMarkup = null, string $parseMode = 'HTML'): mixed {
+        $data = [
+            'chat_id' => $chatId,
+            'photo' => $photoFileId,
+            'caption' => $caption,
+            'parse_mode' => $parseMode
+        ];
+
+        if ($replyMarkup !== null) {
+            $data['reply_markup'] = is_string($replyMarkup) ? $replyMarkup : json_encode($replyMarkup);
+        }
+
+        return $this->call('sendPhoto', $data);
+    }
+
+    public function sendVideo(int|string $chatId, string $videoFileId, string $caption = '', mixed $replyMarkup = null, string $parseMode = 'HTML'): mixed {
+        $data = [
+            'chat_id' => $chatId,
+            'video' => $videoFileId,
+            'caption' => $caption,
+            'parse_mode' => $parseMode
+        ];
+
+        if ($replyMarkup !== null) {
+            $data['reply_markup'] = is_string($replyMarkup) ? $replyMarkup : json_encode($replyMarkup);
+        }
+
+        return $this->call('sendVideo', $data);
+    }
+
+    public function getFile(string $fileId): ?string {
+        $res = $this->call('getFile', ['file_id' => $fileId]);
+        if ($res && isset($res->ok) && $res->ok && isset($res->result->file_path)) {
+            return $res->result->file_path;
+        }
+        return null;
+    }
+
+    public function downloadFileBytes(string $filePath): ?string {
+        $url = "https://api.telegram.org/file/bot" . $this->botToken . "/" . $filePath;
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 15,
+            CURLOPT_SSL_VERIFYPEER => false
+        ]);
+        $data = curl_exec($ch);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($error || !$data) {
+            return null;
+        }
+        return $data;
+    }
 }

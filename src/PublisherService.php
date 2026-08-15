@@ -57,12 +57,11 @@ class PublisherService {
 
         $postText = sprintf(
             "━━━━━━━━━━━━━━━━━━\n" .
-            "🗣 <b>Anonim Talaba</b>\n\n" .
-            "\" %s \"\n\n" .
-            "%s | %s\n" .
-            "━━━━━━━━━━━━━━━━━━\n" .
-            "💬 <b>Anonim izohlar o'chiq / ochiq</b>",
-            htmlspecialchars($sub['sanitized_content']),
+            "🗣 <b>Anonymous Student</b>\n\n" .
+            "%s\n\n" .
+            "<code>%s</code> | %s\n" .
+            "━━━━━━━━━━━━━━━━━━",
+            !empty($sub['sanitized_content']) ? "\"" . htmlspecialchars($sub['sanitized_content']) . "\"" : "",
             htmlspecialchars($sub['public_id']),
             htmlspecialchars($sub['category'])
         );
@@ -70,12 +69,21 @@ class PublisherService {
         $keyboard = [
             'inline_keyboard' => [
                 [
-                    ['text' => "💬 Anonim izoh qoldirish", 'url' => $deepLinkUrl]
+                    ['text' => "💬 Leave Anonymous Comment", 'url' => $deepLinkUrl]
                 ]
             ]
         ];
 
-        $res = $this->bot->sendMessage($this->channelId, $postText, $keyboard);
+        $mediaType = $sub['media_type'] ?? null;
+        $mediaFileId = $sub['media_file_id'] ?? null;
+
+        if ($mediaType === 'photo' && $mediaFileId) {
+            $res = $this->bot->sendPhoto($this->channelId, $mediaFileId, $postText, $keyboard);
+        } elseif ($mediaType === 'video' && $mediaFileId) {
+            $res = $this->bot->sendVideo($this->channelId, $mediaFileId, $postText, $keyboard);
+        } else {
+            $res = $this->bot->sendMessage($this->channelId, $postText, $keyboard);
+        }
 
         if (isset($res->result->message_id)) {
             $msgId = (int)$res->result->message_id;

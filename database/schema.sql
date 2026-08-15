@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS submissions (
     category VARCHAR(50) DEFAULT 'General',
     content TEXT NOT NULL,
     sanitized_content TEXT NOT NULL,
+    media_type VARCHAR(20) DEFAULT NULL,
+    media_file_id VARCHAR(255) DEFAULT NULL,
     ai_status VARCHAR(50) DEFAULT 'NEEDS_REVIEW',
     ai_score FLOAT DEFAULT 0.0,
     ai_reason TEXT DEFAULT NULL,

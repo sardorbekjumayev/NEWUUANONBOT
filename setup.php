@@ -15,6 +15,17 @@ try {
     Database::initSchema();
     echo "✓ Database schema initialized successfully.\n";
 
+    // Column migrations for submissions table
+    $driver = strtolower($db->getAttribute(PDO::ATTR_DRIVER_NAME));
+    if ($driver === 'mysql') {
+        $cols = $db->query("SHOW COLUMNS FROM submissions LIKE 'media_type'")->fetchAll();
+        if (empty($cols)) {
+            $db->exec("ALTER TABLE submissions ADD COLUMN media_type VARCHAR(20) DEFAULT NULL AFTER sanitized_content");
+            $db->exec("ALTER TABLE submissions ADD COLUMN media_file_id VARCHAR(255) DEFAULT NULL AFTER media_type");
+            echo "✓ Added media_type and media_file_id columns to submissions table.\n";
+        }
+    }
+
     $config = require __DIR__ . '/config.php';
     $defaultUser = $config['admin']['default_user'];
     $defaultPass = $config['admin']['default_pass'];
