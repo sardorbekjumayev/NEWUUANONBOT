@@ -68,7 +68,7 @@ return [
     'moderation_group_id' => (string) $env('MODERATION_GROUP_ID', ''),
     'discussion_group_id' => (string) $env('DISCUSSION_GROUP_ID', ''),
     'gemini_api_key' => (string) $env('GEMINI_API_KEY', ''),
-    'gemini_model' => (string) $env('GEMINI_MODEL', 'gemini-2.5-flash-lite'),
+    'gemini_model' => (string) $env('GEMINI_MODEL', 'gemini-3.6-flash'),
     'admin_ids' => $csv($env('ADMIN_IDS', '')),
     'webhook_url' => (string) $env('WEBHOOK_URL', ''),
     'webhook_secret' => (string) $env('WEBHOOK_SECRET', ''),
