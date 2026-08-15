@@ -26,12 +26,18 @@ final class Helpers
         $body = self::b64($json ?: '{}');
         $sig = self::shortSig($body, $secret);
 
-        return $body . '.' . $sig;
+        return $body . $sig;
     }
 
     public static function verifyHmacToken(string $token, string $secret): ?array
     {
-        [$body, $sig] = array_pad(explode('.', $token, 2), 2, '');
+        if (str_contains($token, '.')) {
+            [$body, $sig] = array_pad(explode('.', $token, 2), 2, '');
+        } else {
+            $body = substr($token, 0, -16);
+            $sig = substr($token, -16);
+        }
+
         if ($body === '' || $sig === '' || !hash_equals(self::shortSig($body, $secret), $sig)) {
             return null;
         }

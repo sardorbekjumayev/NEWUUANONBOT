@@ -191,6 +191,10 @@ final class Bot
         $chatId = (string) ($message['chat']['id'] ?? '');
         $fromId = (string) ($message['from']['id'] ?? '');
         $userMsgId = (int) ($message['message_id'] ?? 0);
+        $checking = $this->telegram->sendMessage($chatId, '⏳ Xabaringiz tekshirilmoqda...', [
+            'reply_to_message_id' => $userMsgId,
+        ]);
+        $checkingId = (int) ($checking['result']['message_id'] ?? 0);
         $content = $this->extractContent($message);
 
         if ($content['type'] !== 'text' && mb_strlen($content['text']) > (int) $this->config['max_caption_length']) {
@@ -231,26 +235,23 @@ final class Bot
             $publish = $this->publishTextDirect($textForAI, $target, $threadId ?? 0);
             if ($publish['ok']) {
                 $publishedId = (int) ($publish['result']['message_id'] ?? 0);
-                $delSeal = Helpers::seal([
-                    'u' => $fromId,
-                    'c' => $chatId,
-                    'status' => 'PUBLISHED',
-                    'pub_id' => $publishedId,
-                    'target' => $target,
-                ], $this->config['app_secret']);
-
                 $statusMsg = $target === 'comment'
-                    ? '✅ Anonim izohingiz post ostiga joylashtirildi.'
-                    : '✅ Xabaringiz anonim ravishda kanalga nashr qilindi.';
+                    ? '✅ Anonim izohingiz yuborildi va post ostiga joylashtirildi.'
+                    : '✅ Xabaringiz yuborildi va anonim ravishda kanalga nashr qilindi.';
 
-                $this->telegram->sendMessage($chatId, $statusMsg, [
-                    'reply_to_message_id' => $userMsgId,
+                $statusExtra = [
                     'reply_markup' => [
                         'inline_keyboard' => [[
-                            ['text' => '🗑 Postni o\'chirish', 'callback_data' => 'del:' . $delSeal]
+                            ['text' => '🗑 Postni o\'chirish', 'callback_data' => $this->deleteCallback('delp', $target, $publishedId, $fromId)]
                         ]]
                     ]
-                ]);
+                ];
+                if ($checkingId > 0) {
+                    $this->telegram->editMessageText($chatId, $checkingId, $statusMsg, $statusExtra);
+                } else {
+                    $statusExtra['reply_to_message_id'] = $userMsgId;
+                    $this->telegram->sendMessage($chatId, $statusMsg, $statusExtra);
+                }
                 Helpers::log('INFO', 'AI auto-published text submission');
                 return;
             }
@@ -259,6 +260,16 @@ final class Bot
         // Send to Moderation Group for review
         $sent = $this->sendToModeration($content, $meta);
         $moderationMessageId = (int) ($sent['result']['message_id'] ?? 0);
+        if ($moderationMessageId <= 0) {
+            $failText = '⚠️ Xabaringizni yuborishda xatolik bo\'ldi. Iltimos, keyinroq qayta urinib ko\'ring.';
+            if ($checkingId > 0) {
+                $this->telegram->editMessageText($chatId, $checkingId, $failText);
+            } else {
+                $this->telegram->sendMessage($chatId, $failText, ['reply_to_message_id' => $userMsgId]);
+            }
+            return;
+        }
+
         if ($moderationMessageId > 0) {
             $this->telegram->editReplyMarkup(
                 $this->config['moderation_group_id'],
@@ -267,22 +278,26 @@ final class Bot
             );
         }
 
-        $delSeal = Helpers::seal([
-            'u' => $fromId,
-            'c' => $chatId,
-            'status' => 'WAITING',
-            'mod_id' => $moderationMessageId,
-            'target' => $target,
-        ], $this->config['app_secret']);
+        $queuedText = match (strtolower((string) ($ai['decision'] ?? 'review'))) {
+            'reject' => '⚠️ Xabaringiz filterda ushlab qolindi va admin tekshiruviga yuborildi.',
+            default => $content['type'] === 'text'
+                ? '⚠️ Xabaringiz filter/admin tekshiruviga yuborildi.'
+                : '⚠️ Media xabaringiz admin tekshiruviga yuborildi.',
+        };
 
-        $this->telegram->sendMessage($chatId, '⏳ Xabaringiz moderatsiya tekshiruviga olindi.', [
-            'reply_to_message_id' => $userMsgId,
+        $queuedExtra = [
             'reply_markup' => [
                 'inline_keyboard' => [[
-                    ['text' => '🗑 Yuborishni bekor qilish', 'callback_data' => 'del:' . $delSeal]
+                    ['text' => '🗑 Yuborishni bekor qilish', 'callback_data' => $this->deleteCallback('delw', $target, $moderationMessageId, $fromId)]
                 ]]
             ]
-        ]);
+        ];
+        if ($checkingId > 0) {
+            $this->telegram->editMessageText($chatId, $checkingId, $queuedText, $queuedExtra);
+        } else {
+            $queuedExtra['reply_to_message_id'] = $userMsgId;
+            $this->telegram->sendMessage($chatId, $queuedText, $queuedExtra);
+        }
 
         Helpers::log('INFO', 'submission queued for moderation', ['type' => $content['type']]);
     }
@@ -299,7 +314,7 @@ final class Bot
             return;
         }
 
-        if (str_starts_with($data, 'del:')) {
+        if (str_starts_with($data, 'delw:') || str_starts_with($data, 'delp:') || str_starts_with($data, 'del:')) {
             $this->deleteOwnPost($callback);
             return;
         }
@@ -548,19 +563,16 @@ final class Bot
             return;
         }
 
-        $delSeal = Helpers::seal([
-            'u' => (string) $owner['u'],
-            'c' => (string) $owner['c'],
-            'status' => 'PUBLISHED',
-            'pub_id' => $publishedMessageId,
-            'target' => (string) ($meta['target'] ?? 'post'),
-        ], $this->config['app_secret']);
-
         $replyMsgId = (int) ($owner['msg'] ?? 0);
         $extra = [
             'reply_markup' => [
                 'inline_keyboard' => [[
-                    ['text' => '🗑 Postni o\'chirish', 'callback_data' => 'del:' . $delSeal]
+                    ['text' => '🗑 Postni o\'chirish', 'callback_data' => $this->deleteCallback(
+                        'delp',
+                        (string) ($meta['target'] ?? 'post'),
+                        $publishedMessageId,
+                        (string) $owner['u']
+                    )]
                 ]]
             ]
         ];
@@ -592,45 +604,72 @@ final class Bot
         $id = (string) ($callback['id'] ?? '');
         $fromId = (string) ($callback['from']['id'] ?? '');
         $data = (string) ($callback['data'] ?? '');
-        $seal = substr($data, 4);
 
-        $payload = Helpers::openSeal($seal, $this->config['app_secret']);
-        if (!is_array($payload) || (string) ($payload['u'] ?? '') !== $fromId) {
+        $parsed = $this->parseDeleteCallback($data, $fromId);
+        if ($parsed === null) {
             $this->telegram->answerCallback($id, '⛔ Ushbu tugma sizga tegishli emas.', true);
             return;
         }
 
-        $status = (string) ($payload['status'] ?? '');
-        $target = (string) ($payload['target'] ?? 'post');
-        $chatId = (string) ($payload['c'] ?? $fromId);
+        [$action, $target, $messageId] = $parsed;
+        $chatId = (string) ($callback['message']['chat']['id'] ?? $fromId);
+        $buttonMessageId = (int) ($callback['message']['message_id'] ?? 0);
 
-        if ($status === 'WAITING') {
-            $modId = (int) ($payload['mod_id'] ?? 0);
-            if ($modId > 0) {
-                $this->telegram->deleteMessage($this->config['moderation_group_id'], $modId);
-            }
+        if ($action === 'delw') {
+            $this->telegram->deleteMessage($this->config['moderation_group_id'], $messageId);
             $this->telegram->answerCallback($id, 'Xabar bekor qilindi.');
-            if (isset($callback['message']['message_id'])) {
-                $this->telegram->editMessageText($chatId, (int) $callback['message']['message_id'], '🗑 Xabaringiz moderatsiyadan olindi va o\'chirildi.');
-            } else {
-                $this->telegram->sendMessage($chatId, '🗑 Xabaringiz moderatsiyadan olindi va o\'chirildi.');
-            }
+            $this->editOrSendPrivateStatus($chatId, $buttonMessageId, '🗑 Xabaringiz moderatsiyadan olindi va o\'chirildi.');
             return;
         }
 
-        if ($status === 'PUBLISHED') {
-            $pubId = (int) ($payload['pub_id'] ?? 0);
-            if ($pubId > 0) {
-                $targetChat = $target === 'comment' ? $this->config['discussion_group_id'] : $this->config['channel_id'];
-                $this->telegram->deleteMessage($targetChat, $pubId);
-            }
-            $this->telegram->answerCallback($id, 'Post o\'chirildi.');
-            if (isset($callback['message']['message_id'])) {
-                $this->telegram->editMessageText($chatId, (int) $callback['message']['message_id'], '🗑 Nashr qilingan xabaringiz o\'chirildi.');
-            } else {
-                $this->telegram->sendMessage($chatId, '🗑 Nashr qilingan xabaringiz o\'chirildi.');
-            }
+        $targetChat = $target === 'comment' ? $this->config['discussion_group_id'] : $this->config['channel_id'];
+        $this->telegram->deleteMessage($targetChat, $messageId);
+        $this->telegram->answerCallback($id, 'Post o\'chirildi.');
+        $this->editOrSendPrivateStatus($chatId, $buttonMessageId, '🗑 Nashr qilingan xabaringiz o\'chirildi.');
+    }
+
+    private function deleteCallback(string $action, string $target, int $messageId, string $ownerId): string
+    {
+        $targetCode = $target === 'comment' ? 'c' : 'p';
+        $sig = substr(Helpers::b64(hash_hmac(
+            'sha256',
+            $action . '|' . $targetCode . '|' . $messageId . '|' . $ownerId,
+            $this->config['app_secret'],
+            true
+        )), 0, 16);
+
+        return $action . ':' . $targetCode . ':' . $messageId . ':' . $sig;
+    }
+
+    private function parseDeleteCallback(string $data, string $fromId): ?array
+    {
+        [$action, $targetCode, $messageId, $sig] = array_pad(explode(':', $data, 4), 4, '');
+        if (!in_array($action, ['delw', 'delp'], true) || !in_array($targetCode, ['p', 'c'], true) || !ctype_digit($messageId)) {
+            return null;
         }
+
+        $expected = substr(Helpers::b64(hash_hmac(
+            'sha256',
+            $action . '|' . $targetCode . '|' . $messageId . '|' . $fromId,
+            $this->config['app_secret'],
+            true
+        )), 0, 16);
+
+        if (!hash_equals($expected, $sig)) {
+            return null;
+        }
+
+        return [$action, $targetCode === 'c' ? 'comment' : 'post', (int) $messageId];
+    }
+
+    private function editOrSendPrivateStatus(string $chatId, int $messageId, string $text): void
+    {
+        if ($messageId > 0) {
+            $this->telegram->editMessageText($chatId, $messageId, $text);
+            return;
+        }
+
+        $this->telegram->sendMessage($chatId, $text);
     }
 
     private function startComment(string $chatId, string $token): void
@@ -643,7 +682,7 @@ final class Bot
 
         $this->telegram->sendMessage(
             $chatId,
-            "✍️ <b>Ushbu postga anonim izoh qoldirish:</b>\n\nQuyidagi kiritish maydoniga izohingizni yozib yuboring.\n\nCOMMENT_REF:" . htmlspecialchars($token, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+            "✍️ <b>Ushbu postga anonim izoh qoldiring.</b>\n\nIzohingizni shu xabarga reply qilib yuboring. Shaxsingiz ko'rsatilmaydi.\n\nCOMMENT_REF:" . htmlspecialchars($token, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
             [
                 'reply_markup' => [
                     'force_reply' => true,
