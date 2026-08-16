@@ -233,18 +233,32 @@ final class Bot
         $channelMsgId = $this->resolveChannelMessageId($message);
         $modUrl = 'https://t.me/' . $this->config['bot_username'] . '?start=mod_' . $channelMsgId;
 
-        $this->telegram->sendMessage(
+        // 1. Send public comment prompt message for all users
+        $commentMsg = $this->telegram->sendMessage(
             $this->config['discussion_group_id'],
             '💬 <b>Ushbu postga anonim izoh qoldirish uchun quyidagi tugmani bosing:</b>',
             [
                 'reply_to_message_id' => $discMessageId,
                 'reply_markup' => [
-                    'inline_keyboard' => [
-                        [
-                            ['text' => '✍️ Anonim izoh yozish', 'url' => $url],
-                            ['text' => '🗑 O\'chirish / Taqiq', 'url' => $modUrl],
-                        ]
-                    ]
+                    'inline_keyboard' => [[
+                        ['text' => '✍️ Anonim izoh yozish', 'url' => $url]
+                    ]]
+                ]
+            ]
+        );
+
+        $commentMsgId = (int) ($commentMsg['result']['message_id'] ?? 0);
+
+        // 2. Send separate reply message for Admin management & word banning
+        $this->telegram->sendMessage(
+            $this->config['discussion_group_id'],
+            '⚙️ <b>Adminlar uchun boshqaruv (O\'chirish & Taqiq):</b>',
+            [
+                'reply_to_message_id' => $commentMsgId > 0 ? $commentMsgId : $discMessageId,
+                'reply_markup' => [
+                    'inline_keyboard' => [[
+                        ['text' => '🗑 O\'chirish / Taqiq', 'url' => $modUrl]
+                    ]]
                 ]
             ]
         );
@@ -389,20 +403,6 @@ final class Bot
             if ($publish['ok']) {
                 $publishedId = (int) ($publish['result']['message_id'] ?? 0);
                 $this->savePublishedPost($publishedId, $textForAI);
-
-                // Add delete button to channel post
-                if ($publishedId > 0 && ($this->config['bot_username'] ?? '') !== '') {
-                    $botUser = $this->config['bot_username'];
-                    $this->telegram->editReplyMarkup(
-                        $this->config['channel_id'],
-                        $publishedId,
-                        [
-                            'inline_keyboard' => [[
-                                ['text' => '🗑 O\'chirish / Taqiq', 'url' => "https://t.me/{$botUser}?start=mod_{$publishedId}"]
-                            ]]
-                        ]
-                    );
-                }
 
                 $statusMsg = $target === 'comment'
                     ? '✅ Anonim izohingiz yuborildi va post ostiga joylashtirildi.'
@@ -636,18 +636,6 @@ final class Bot
         if ($channelMessageId > 0 && ($meta['target'] ?? 'post') === 'post') {
             $postContent = (string) ($meta['content'] ?? '');
             $this->savePublishedPost($channelMessageId, $postContent);
-            if (($this->config['bot_username'] ?? '') !== '') {
-                $botUser = $this->config['bot_username'];
-                $this->telegram->editReplyMarkup(
-                    $this->config['channel_id'],
-                    $channelMessageId,
-                    [
-                        'inline_keyboard' => [[
-                            ['text' => '🗑 O\'chirish / Taqiq', 'url' => "https://t.me/{$botUser}?start=mod_{$channelMessageId}"]
-                        ]]
-                    ]
-                );
-            }
         }
         $meta['status'] = 'PUBLISHED';
         $this->updateModerationMessage($message, $meta, false);
