@@ -18,12 +18,15 @@ final class AdminManager
     private function load(): void
     {
         if (is_file($this->filePath)) {
-            $raw = file_get_contents($this->filePath);
-            $data = json_decode((string) $raw, true);
-            if (is_array($data)) {
-                $this->data = $data;
-                return;
+            $raw = @file_get_contents($this->filePath);
+            if ($raw !== false && $raw !== '') {
+                $data = json_decode($raw, true);
+                if (is_array($data)) {
+                    $this->data = $data;
+                    return;
+                }
             }
+            Helpers::log('ERROR', 'AdminManager settings file read/parse issue, preserving file state', ['file' => $this->filePath]);
         }
 
         $this->data = [
@@ -41,11 +44,18 @@ final class AdminManager
     {
         $dir = dirname($this->filePath);
         if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
+            @mkdir($dir, 0755, true);
         }
 
-        file_put_contents($this->filePath, json_encode($this->data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+        $json = json_encode($this->data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        $tmpFile = $this->filePath . '.tmp.' . bin2hex(random_bytes(4));
+        if (@file_put_contents($tmpFile, $json, LOCK_EX) !== false) {
+            @rename($tmpFile, $this->filePath);
+        } else {
+            @file_put_contents($this->filePath, $json, LOCK_EX);
+        }
     }
+
 
     /**
      * @param array $baseConfig Base config loaded from config.php / .env

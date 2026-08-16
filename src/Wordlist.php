@@ -19,18 +19,24 @@ final class Wordlist
     private function load(): void
     {
         if (is_file($this->filePath)) {
-            $raw = file_get_contents($this->filePath);
-            $data = json_decode((string) $raw, true);
-            if (is_array($data)) {
-                $this->words = array_values(array_unique(array_filter(array_map(
-                    static fn (mixed $item): string => mb_strtolower(trim((string) $item)),
-                    $data
-                ))));
-                return;
+            $raw = @file_get_contents($this->filePath);
+            if ($raw !== false && $raw !== '') {
+                $data = json_decode($raw, true);
+                if (is_array($data)) {
+                    $this->words = array_values(array_unique(array_filter(array_map(
+                        static fn (mixed $item): string => mb_strtolower(trim((string) $item)),
+                        $data
+                    ))));
+                    return;
+                }
             }
+            // File exists but was unreadable or temporary invalid JSON; log error and preserve empty array without overwriting file
+            Helpers::log('ERROR', 'Wordlist file read/parse issue, preserving existing file state', ['file' => $this->filePath]);
+            $this->words = [];
+            return;
         }
 
-        // Default initial wordlist
+        // Default initial wordlist if file doesn't exist at all
         $this->words = ['crypto', 'forex', 'betting', 'casino', 'promocode', 'airdrop'];
         $this->save();
     }
@@ -39,7 +45,7 @@ final class Wordlist
     {
         $dir = dirname($this->filePath);
         if (!is_dir($dir)) {
-            mkdir($dir, 0755, true);
+            @mkdir($dir, 0755, true);
         }
 
         $this->words = array_values(array_unique(array_filter(array_map(
@@ -47,8 +53,15 @@ final class Wordlist
             $this->words
         ))));
 
-        file_put_contents($this->filePath, json_encode($this->words, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+        $json = json_encode($this->words, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        $tmpFile = $this->filePath . '.tmp.' . bin2hex(random_bytes(4));
+        if (@file_put_contents($tmpFile, $json, LOCK_EX) !== false) {
+            @rename($tmpFile, $this->filePath);
+        } else {
+            @file_put_contents($this->filePath, $json, LOCK_EX);
+        }
     }
+
 
     /**
      * @return array<string>

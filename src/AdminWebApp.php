@@ -175,7 +175,10 @@ final class AdminWebApp
             $settings['gemini_enabled'] = filter_var($input['gemini_enabled'], FILTER_VALIDATE_BOOLEAN);
         }
         if (array_key_exists('gemini_api_key', $input)) {
-            $settings['gemini_api_key'] = trim((string) $input['gemini_api_key']);
+            $key = trim((string) $input['gemini_api_key']);
+            if ($key !== '') {
+                $settings['gemini_api_key'] = $key;
+            }
         }
         if (array_key_exists('gemini_model', $input)) {
             $settings['gemini_model'] = trim((string) $input['gemini_model']) ?: 'gemini-2.5-flash-lite';
@@ -184,7 +187,10 @@ final class AdminWebApp
             $settings['groq_enabled'] = filter_var($input['groq_enabled'], FILTER_VALIDATE_BOOLEAN);
         }
         if (array_key_exists('groq_api_key', $input)) {
-            $settings['groq_api_key'] = trim((string) $input['groq_api_key']);
+            $key = trim((string) $input['groq_api_key']);
+            if ($key !== '') {
+                $settings['groq_api_key'] = $key;
+            }
         }
         if (array_key_exists('groq_model', $input)) {
             $settings['groq_model'] = trim((string) $input['groq_model']) ?: 'llama-3.1-8b-instant';

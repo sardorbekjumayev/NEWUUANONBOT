@@ -87,19 +87,27 @@ if (($config['bot_token'] ?? '') === '' || ($config['app_secret'] ?? '') === '')
     return;
 }
 
-$bot = new Bot(
-    $config,
-    new Telegram($config['bot_token']),
-    new AI(
-        (bool) ($config['gemini_enabled'] ?? false),
-        (string) ($config['gemini_api_key'] ?? ''),
-        (string) ($config['gemini_model'] ?? 'gemini-2.5-flash-lite'),
-        (bool) ($config['groq_enabled'] ?? false),
-        (string) ($config['groq_api_key'] ?? ''),
-        (string) ($config['groq_model'] ?? 'llama-3.1-8b-instant')
-    ),
-    $adminManager,
-    $wordlist
-);
+try {
+    $bot = new Bot(
+        $config,
+        new Telegram($config['bot_token']),
+        new AI(
+            (bool) ($config['gemini_enabled'] ?? false),
+            (string) ($config['gemini_api_key'] ?? ''),
+            (string) ($config['gemini_model'] ?? 'gemini-2.5-flash-lite'),
+            (bool) ($config['groq_enabled'] ?? false),
+            (string) ($config['groq_api_key'] ?? ''),
+            (string) ($config['groq_model'] ?? 'llama-3.1-8b-instant')
+        ),
+        $adminManager,
+        $wordlist
+    );
 
-$bot->handle($update);
+    $bot->handle($update);
+} catch (\Throwable $e) {
+    Helpers::log('ERROR', 'Unhandled bot exception: ' . $e->getMessage(), [
+        'file' => $e->getFile(),
+        'line' => $e->getLine(),
+    ]);
+}
+

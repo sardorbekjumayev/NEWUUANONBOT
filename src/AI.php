@@ -78,9 +78,9 @@ final class AI
             'Authorization: Bearer ' . $this->groqApiKey,
         ];
 
-        // 1. Try Chat Completions endpoint first
+        $model = $this->groqModel ?: 'llama-3.1-8b-instant';
         $payloadChat = json_encode([
-            'model' => $this->groqModel ?: 'llama-3.1-8b-instant',
+            'model' => $model,
             'temperature' => 0,
             'max_tokens' => 150,
             'response_format' => ['type' => 'json_object'],
@@ -97,18 +97,24 @@ final class AI
             'Groq API chat completions failed'
         );
 
-        // 2. Fallback to Responses endpoint if chat completions fails or returns HTTP error
-        if ($response === null) {
-            $payloadResponses = json_encode([
-                'model' => $this->groqModel ?: 'openai/gpt-oss-20b',
-                'input' => $prompt,
+        // Fallback to default Groq model if custom model failed
+        if ($response === null && $model !== 'llama-3.1-8b-instant') {
+            $payloadFallback = json_encode([
+                'model' => 'llama-3.1-8b-instant',
+                'temperature' => 0,
+                'max_tokens' => 150,
+                'response_format' => ['type' => 'json_object'],
+                'messages' => [[
+                    'role' => 'user',
+                    'content' => $prompt,
+                ]],
             ]);
 
             $response = $this->postJson(
-                'https://api.groq.com/openai/v1/responses',
-                $payloadResponses,
+                'https://api.groq.com/openai/v1/chat/completions',
+                $payloadFallback,
                 $headers,
-                'Groq API responses failed'
+                'Groq API fallback completions failed'
             );
         }
 
@@ -124,7 +130,6 @@ final class AI
         $text = (string) (
             $data['choices'][0]['message']['content'] ??
             $data['output_text'] ??
-            $data['output'][0]['content'][0]['text'] ??
             $data['choices'][0]['text'] ??
             ''
         );
@@ -188,12 +193,20 @@ PROMPT;
 
     private function normalizeAiJson(string $text, string $errorMessage): array
     {
-        $json = json_decode(trim($text), true);
+        $cleanText = trim($text);
+        // Strip markdown code fences if present e.g. ```json ... ```
+        if (str_starts_with($cleanText, '```')) {
+            $cleanText = (string) preg_replace('~^```(?:json)?\s*|\s*```$~ui', '', $cleanText);
+            $cleanText = trim($cleanText);
+        }
+
+        $json = json_decode($cleanText, true);
 
         if (!is_array($json)) {
-            Helpers::log('ERROR', $errorMessage);
+            Helpers::log('ERROR', $errorMessage, ['raw_text' => mb_substr($text, 0, 200)]);
             return ['decision' => 'review', 'category' => 'other', 'unavailable' => true];
         }
+
 
         $decision = in_array($json['decision'] ?? '', ['allow', 'review', 'reject'], true) ? $json['decision'] : 'review';
         $category = in_array($json['category'] ?? '', [

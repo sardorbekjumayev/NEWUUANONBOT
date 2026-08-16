@@ -19,6 +19,7 @@ final class Telegram
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => json_encode($params),
             CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_CONNECTTIMEOUT => 5,
             CURLOPT_TIMEOUT => 18,
         ]);
 
@@ -28,7 +29,7 @@ final class Telegram
 
         if ($response === false) {
             Helpers::log('ERROR', 'Telegram API failed', ['method' => $method, 'error' => $error]);
-            return ['ok' => false, 'description' => 'Telegram API failed'];
+            return ['ok' => false, 'description' => 'Telegram API failed: ' . $error];
         }
 
         $data = json_decode((string) $response, true);
@@ -70,23 +71,41 @@ final class Telegram
 
     public function editMessageText(string|int $chatId, int $messageId, string $text, array $extra = []): array
     {
-        return $this->call('editMessageText', array_merge([
+        $params = array_merge([
             'chat_id' => $chatId,
             'message_id' => $messageId,
             'text' => $text,
             'parse_mode' => 'HTML',
             'disable_web_page_preview' => true,
-        ], $extra));
+        ], $extra);
+
+        $res = $this->call('editMessageText', $params);
+
+        if (!($res['ok'] ?? false) && isset($params['parse_mode'])) {
+            unset($params['parse_mode']);
+            $res = $this->call('editMessageText', $params);
+        }
+
+        return $res;
     }
 
     public function editMessageCaption(string|int $chatId, int $messageId, string $caption, array $extra = []): array
     {
-        return $this->call('editMessageCaption', array_merge([
+        $params = array_merge([
             'chat_id' => $chatId,
             'message_id' => $messageId,
             'caption' => $caption,
             'parse_mode' => 'HTML',
-        ], $extra));
+        ], $extra);
+
+        $res = $this->call('editMessageCaption', $params);
+
+        if (!($res['ok'] ?? false) && isset($params['parse_mode'])) {
+            unset($params['parse_mode']);
+            $res = $this->call('editMessageCaption', $params);
+        }
+
+        return $res;
     }
 
     public function editReplyMarkup(string|int $chatId, int $messageId, array $markup = []): array
@@ -109,11 +128,24 @@ final class Telegram
 
     public function copyMessage(string|int $to, string|int $from, int $messageId, array $extra = []): array
     {
-        return $this->call('copyMessage', array_merge([
+        $params = array_merge([
             'chat_id' => $to,
             'from_chat_id' => $from,
             'message_id' => $messageId,
-        ], $extra));
+        ], $extra);
+
+        $res = $this->call('copyMessage', $params);
+
+        if (!($res['ok'] ?? false) && isset($params['reply_to_message_id'])) {
+            unset($params['reply_to_message_id']);
+            $res = $this->call('copyMessage', $params);
+        }
+        if (!($res['ok'] ?? false) && isset($params['parse_mode'])) {
+            unset($params['parse_mode']);
+            $res = $this->call('copyMessage', $params);
+        }
+
+        return $res;
     }
 
     public function deleteMessage(string|int $chatId, int $messageId): array
@@ -149,6 +181,20 @@ final class Telegram
             $params['parse_mode'] = 'HTML';
         }
 
-        return $this->call($method, $params);
+        $res = $this->call($method, $params);
+
+        if (!($res['ok'] ?? false)) {
+            if (isset($params['reply_to_message_id'])) {
+                unset($params['reply_to_message_id']);
+                $res = $this->call($method, $params);
+            }
+            if (!($res['ok'] ?? false) && isset($params['parse_mode'])) {
+                unset($params['parse_mode']);
+                $res = $this->call($method, $params);
+            }
+        }
+
+        return $res;
     }
+
 }

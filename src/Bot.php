@@ -109,8 +109,9 @@ final class Bot
                 return;
             }
             $newId = trim(substr($text, 10));
+            $safeId = htmlspecialchars($newId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
             if ($this->adminManager->addAdmin($newId, $this->config['admin_ids'] ?? [])) {
-                $this->telegram->sendMessage($chatId, "✅ Yangi admin qo'shildi: {$newId}");
+                $this->telegram->sendMessage($chatId, "✅ Yangi admin qo'shildi: <code>{$safeId}</code>");
             } else {
                 $this->telegram->sendMessage($chatId, "❌ Noto'g'ri Telegram ID.");
             }
@@ -122,8 +123,9 @@ final class Bot
                 return;
             }
             $targetId = trim(substr($text, 10));
+            $safeId = htmlspecialchars($targetId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
             $this->adminManager->removeAdmin($targetId, $this->config['admin_ids'] ?? []);
-            $this->telegram->sendMessage($chatId, "🗑 Admin olib tashlandi: {$targetId}");
+            $this->telegram->sendMessage($chatId, "🗑 Admin olib tashlandi: <code>{$safeId}</code>");
             return;
         }
 
@@ -132,8 +134,9 @@ final class Bot
                 return;
             }
             $word = trim(substr($text, 9));
+            $safeWord = htmlspecialchars($word, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
             if ($this->wordlist->add($word)) {
-                $this->telegram->sendMessage($chatId, "✅ Wordlistga qo'shildi: {$word}");
+                $this->telegram->sendMessage($chatId, "✅ Wordlistga qo'shildi: <b>{$safeWord}</b>");
             } else {
                 $this->telegram->sendMessage($chatId, "❌ So'z kiritilmadi.");
             }
@@ -145,8 +148,9 @@ final class Bot
                 return;
             }
             $word = trim(substr($text, 9));
+            $safeWord = htmlspecialchars($word, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
             if ($this->wordlist->delete($word)) {
-                $this->telegram->sendMessage($chatId, "🗑 Wordlistdan o'chirildi: {$word}");
+                $this->telegram->sendMessage($chatId, "🗑 Wordlistdan o'chirildi: <b>{$safeWord}</b>");
             } else {
                 $this->telegram->sendMessage($chatId, "❌ So'z topilmadi.");
             }
@@ -259,13 +263,15 @@ final class Bot
 
         $replyToId = $isReply ? $this->resolveDiscussionReplyTargetId($message['reply_to_message']) : 0;
         $threadId = (int) ($message['message_thread_id'] ?? 0);
-        $this->telegram->deleteMessage($this->config['discussion_group_id'], (int) ($message['message_id'] ?? 0));
         $publish = $this->publishDiscussionAnonymous($content, $replyToId, $threadId);
 
         if (!($publish['ok'] ?? false)) {
             Helpers::log('ERROR', 'anonymous discussion publish failed', ['description' => $publish['description'] ?? 'unknown']);
             return;
         }
+
+        // Delete user's trigger message only after successful publication
+        $this->telegram->deleteMessage($this->config['discussion_group_id'], (int) ($message['message_id'] ?? 0));
 
         $publishedId = (int) ($publish['result']['message_id'] ?? 0);
         $fromId = (string) ($message['from']['id'] ?? '');
@@ -1478,10 +1484,12 @@ final class Bot
         $file = dirname(__DIR__) . '/data/seen_updates.json';
         $seen = [];
         if (is_file($file)) {
-            $raw = file_get_contents($file);
-            $data = json_decode((string) $raw, true);
-            if (is_array($data)) {
-                $seen = $data;
+            $raw = @file_get_contents($file);
+            if ($raw !== false && $raw !== '') {
+                $data = json_decode($raw, true);
+                if (is_array($data)) {
+                    $seen = $data;
+                }
             }
         }
 
@@ -1502,7 +1510,12 @@ final class Bot
         if (!is_dir($dir)) {
             @mkdir($dir, 0755, true);
         }
-        @file_put_contents($file, json_encode($seen), LOCK_EX);
+
+        $json = json_encode($seen);
+        $tmpFile = $file . '.tmp.' . bin2hex(random_bytes(4));
+        if (@file_put_contents($tmpFile, $json, LOCK_EX) !== false) {
+            @rename($tmpFile, $file);
+        }
 
         return false;
     }
