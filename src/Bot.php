@@ -418,6 +418,19 @@ final class Bot
                 Helpers::log('INFO', 'auto-published text submission');
                 return;
             }
+
+            // Direct channel publish failed
+            $errDesc = (string) ($publish['description'] ?? 'Noma\'lum xatolik');
+            Helpers::log('ERROR', 'Direct channel publish failed', ['description' => $errDesc, 'channel_id' => $this->config['channel_id'] ?? '']);
+
+            $safeErr = htmlspecialchars($errDesc, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            $failText = "⚠️ Kanalga nashr etishda xatolik bo'ldi: <b>{$safeErr}</b>\n\nIltimos, bot kanalda admin ekanini va CHANNEL_ID to'g'ri ko'rsatilganini tekshiring.";
+            if ($checkingId > 0) {
+                $this->telegram->editMessageText($chatId, $checkingId, $failText);
+            } else {
+                $this->telegram->sendMessage($chatId, $failText, ['reply_to_message_id' => $userMsgId]);
+            }
+            return;
         }
 
         // Needs Admin Moderation Queue
@@ -448,7 +461,11 @@ final class Bot
         $sent = $this->sendToModeration($content, $meta);
         $moderationMessageId = (int) ($sent['result']['message_id'] ?? 0);
         if ($moderationMessageId <= 0) {
-            $failText = '⚠️ Xabaringizni yuborishda xatolik bo\'ldi. Iltimos, keyinroq qayta urinib ko\'ring.';
+            $errDesc = (string) ($sent['description'] ?? 'Noma\'lum xatolik');
+            Helpers::log('ERROR', 'Moderation send failed', ['description' => $errDesc, 'moderation_group_id' => $this->config['moderation_group_id'] ?? '']);
+
+            $safeErr = htmlspecialchars($errDesc, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            $failText = "⚠️ Moderatsiya guruhiga yuborishda xatolik bo'ldi: <b>{$safeErr}</b>\n\nIltimos, bot guruhda borligini va MODERATION_GROUP_ID to'g'ri o'rnatilganini tekshiring.";
             if ($checkingId > 0) {
                 $this->telegram->editMessageText($chatId, $checkingId, $failText);
             } else {
@@ -1401,6 +1418,9 @@ final class Bot
     private function adminMainKeyboard(): array
     {
         $webhookUrl = (string) ($this->config['webhook_url'] ?? '');
+        if (str_starts_with($webhookUrl, 'http://')) {
+            $webhookUrl = 'https://' . substr($webhookUrl, 7);
+        }
         $webAppUrl = str_contains($webhookUrl, 'index.php') 
             ? rtrim($webhookUrl, '/') . '?app=admin'
             : rtrim($webhookUrl, '/') . '/admin';
