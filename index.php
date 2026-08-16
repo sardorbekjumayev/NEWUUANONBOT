@@ -63,13 +63,19 @@ if (($config['webhook_secret'] ?? '') !== '') {
 $raw = file_get_contents('php://input') ?: '';
 $update = json_decode($raw, true);
 
-ob_start();
+ignore_user_abort(true);
+set_time_limit(60);
+
+$resPayload = json_encode(['ok' => true]);
 http_response_code(200);
 header('Content-Type: application/json');
 header('Connection: close');
-header('Content-Length: 12');
-echo '{"ok":true}';
-ob_end_flush();
+header('Content-Length: ' . strlen($resPayload));
+echo $resPayload;
+
+if (ob_get_level() > 0) {
+    @ob_end_flush();
+}
 
 if (function_exists('fastcgi_finish_request')) {
     fastcgi_finish_request();

@@ -1531,6 +1531,7 @@ final class Bot
             return false;
         }
 
+        $now = time();
         if (isset(self::$seenUpdates[$updateId])) {
             return true;
         }
@@ -1548,17 +1549,18 @@ final class Bot
         }
 
         if (isset($seen[(string) $updateId])) {
-            self::$seenUpdates[$updateId] = time();
+            self::$seenUpdates[$updateId] = $now;
             return true;
         }
 
-        $seen[(string) $updateId] = time();
-        self::$seenUpdates[$updateId] = time();
-
-        if (count($seen) > 300) {
-            asort($seen);
-            $seen = array_slice($seen, -150, null, true);
+        foreach ($seen as $id => $timestamp) {
+            if (($now - (int) $timestamp) > 600) {
+                unset($seen[$id]);
+            }
         }
+
+        $seen[(string) $updateId] = $now;
+        self::$seenUpdates[$updateId] = $now;
 
         $dir = dirname($file);
         if (!is_dir($dir)) {
@@ -1567,7 +1569,7 @@ final class Bot
 
         $json = json_encode($seen);
         $tmpFile = $file . '.tmp.' . bin2hex(random_bytes(4));
-        if (@file_put_contents($tmpFile, $json, LOCK_EX) !== false) {
+        if (@file_put_contents($tmpFile, $json) !== false) {
             @rename($tmpFile, $file);
         }
 
