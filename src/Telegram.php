@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace PUAnonymous;
 
-final class Telegram
+class Telegram
 {
     public function __construct(private readonly string $token)
     {

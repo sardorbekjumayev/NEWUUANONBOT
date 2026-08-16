@@ -148,7 +148,7 @@ final class Wordlist
      * Extracts potential word candidates from text for moderation review
      * @return array<string>
      */
-    public function candidates(string $text): array
+    public function candidates(string $text, int $limit = 30): array
     {
         $words = preg_split('~\s+~u', trim($text));
         if (!is_array($words)) {
@@ -158,11 +158,11 @@ final class Wordlist
         $cleanWords = [];
         foreach ($words as $w) {
             $wClean = trim(preg_replace('~[^\p{L}\p{N}_-]+~u', '', $w));
-            if (mb_strlen($wClean) >= 3 && !in_array(mb_strtolower($wClean), $cleanWords, true)) {
+            if (mb_strlen($wClean) >= 2 && !in_array(mb_strtolower($wClean), $cleanWords, true)) {
                 $cleanWords[] = mb_strtolower($wClean);
             }
         }
 
-        return array_slice($cleanWords, 0, 10);
+        return array_slice($cleanWords, 0, $limit);
     }
 }

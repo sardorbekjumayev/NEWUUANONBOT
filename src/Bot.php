@@ -75,9 +75,14 @@ final class Bot
                 return;
             }
 
+            if (str_starts_with($arg, 'mod_')) {
+                $this->startAdminChannelModeration($chatId, (string) ($message['from']['id'] ?? ''), substr($arg, 4));
+                return;
+            }
+
             $this->telegram->sendMessage(
                 $chatId,
-                "👋 <b>PU Anonymous botiga xush kelibsiz!</b>\n\nXabaringizni yuboring. Matnli xabarlar AI orqali tekshirilib, avtomatik kanalga joylanadi. Medialar esa moderatsiyadan o'tadi.\n\n🔒 Shaxsingiz mutlaqo anonim saqlanadi.",
+                "👋 <b>PU Anonymous botiga xush kelibsiz!</b>\n\nXabaringizni yuboring. Matnli xabarlar avtomatik kanalga joylanadi. Media va havolali xabarlar esa admin moderatsiyasidan o'tadi.\n\n🔒 Shaxsingiz mutlaqo anonim saqlanadi.",
                 [
                     'reply_markup' => [
                         'inline_keyboard' => [
@@ -367,44 +372,32 @@ final class Bot
             return;
         }
 
-        $matchedWords = $content['type'] === 'text' ? $this->findBadWords($textForAI) : [];
+        $isMedia = $this->isMedia($content, $message);
+        $hasLinks = $this->hasLinks($message, $textForAI);
+        $matchedWords = $this->findBadWords($textForAI);
+        $hasBadWords = !empty($matchedWords);
 
-        // Rule: local wordlist is checked before AI so known bad words are cheap and deterministic.
-        if ($matchedWords !== []) {
-            $ai = ['decision' => 'review', 'category' => 'wordlist', 'local_wordlist' => true];
-        } elseif ($content['type'] !== 'text') {
-            $ai = ['decision' => 'review', 'category' => 'other', 'media' => true];
-        } elseif (mb_strlen($textForAI) > (int) $this->config['max_text_length']) {
-            $ai = ['decision' => 'review', 'category' => 'other'];
-        } else {
-            $ai = $this->ai->classifyText($textForAI);
-        }
-
-        $owner = Helpers::seal([
-            'u' => $fromId,
-            'c' => $chatId,
-            'msg' => $userMsgId,
-        ], $this->config['app_secret']);
-
-        $meta = [
-            'status' => 'WAITING',
-            'type' => $content['type'],
-            'target' => $target,
-            'thread' => $threadId ?? 0,
-            'owner' => $owner,
-            'content' => $textForAI,
-            'ai' => strtoupper((string) ($ai['decision'] ?? 'REVIEW')),
-            'category' => strtoupper((string) ($ai['category'] ?? 'OTHER')),
-            'unavailable' => !empty($ai['unavailable']),
-            'local_wordlist' => !empty($ai['local_wordlist']),
-            'matched_words' => $matchedWords,
-        ];
-
-        // Rule: If pure text and AI decision is ALLOW -> auto-publish directly without waiting for admin!
-        if ($content['type'] === 'text' && ($ai['decision'] ?? '') === 'allow') {
+        // Pure text without media, without links, without banned words -> Auto-publish directly to Channel!
+        if (!$isMedia && !$hasLinks && !$hasBadWords) {
             $publish = $this->publishTextDirect($textForAI, $target, $threadId ?? 0);
             if ($publish['ok']) {
                 $publishedId = (int) ($publish['result']['message_id'] ?? 0);
+                $this->savePublishedPost($publishedId, $textForAI);
+
+                // Add delete button to channel post
+                if ($publishedId > 0 && ($this->config['bot_username'] ?? '') !== '') {
+                    $botUser = $this->config['bot_username'];
+                    $this->telegram->editReplyMarkup(
+                        $this->config['channel_id'],
+                        $publishedId,
+                        [
+                            'inline_keyboard' => [[
+                                ['text' => '🗑 O\'chirish / Taqiq', 'url' => "https://t.me/{$botUser}?start=mod_{$publishedId}"]
+                            ]]
+                        ]
+                    );
+                }
+
                 $statusMsg = $target === 'comment'
                     ? '✅ Anonim izohingiz yuborildi va post ostiga joylashtirildi.'
                     : '✅ Xabaringiz yuborildi va anonim ravishda kanalga nashr qilindi.';
@@ -422,10 +415,34 @@ final class Bot
                     $statusExtra['reply_to_message_id'] = $userMsgId;
                     $this->telegram->sendMessage($chatId, $statusMsg, $statusExtra);
                 }
-                Helpers::log('INFO', 'AI auto-published text submission');
+                Helpers::log('INFO', 'auto-published text submission');
                 return;
             }
         }
+
+        // Needs Admin Moderation Queue
+        $category = $isMedia ? 'MEDIA' : ($hasLinks ? 'LINKS' : 'WORDLIST');
+
+        $owner = Helpers::seal([
+            'u' => $fromId,
+            'c' => $chatId,
+            'msg' => $userMsgId,
+        ], $this->config['app_secret']);
+
+        $meta = [
+            'status' => 'WAITING',
+            'type' => $content['type'],
+            'target' => $target,
+            'thread' => $threadId ?? 0,
+            'owner' => $owner,
+            'content' => $textForAI,
+            'ai' => 'REVIEW',
+            'category' => $category,
+            'has_media' => $isMedia,
+            'has_links' => $hasLinks,
+            'local_wordlist' => $hasBadWords,
+            'matched_words' => $matchedWords,
+        ];
 
         // Send to Moderation Group for review
         $sent = $this->sendToModeration($content, $meta);
@@ -440,19 +457,17 @@ final class Bot
             return;
         }
 
-        if ($moderationMessageId > 0) {
-            $this->telegram->editReplyMarkup(
-                $this->config['moderation_group_id'],
-                $moderationMessageId,
-                $this->adminKeyboard($moderationMessageId)
-            );
-        }
+        $this->telegram->editReplyMarkup(
+            $this->config['moderation_group_id'],
+            $moderationMessageId,
+            $this->adminKeyboard($moderationMessageId)
+        );
 
-        $queuedText = match (strtolower((string) ($ai['decision'] ?? 'review'))) {
-            'reject' => '⚠️ Xabaringiz filterda ushlab qolindi va admin tekshiruviga yuborildi.',
-            default => $content['type'] === 'text'
-                ? '⚠️ Xabaringiz filter/admin tekshiruviga yuborildi.'
-                : '⚠️ Media xabaringiz admin tekshiruviga yuborildi.',
+        $queuedText = match ($category) {
+            'MEDIA' => '⚠️ Media xabaringiz admin tekshiruviga yuborildi.',
+            'LINKS' => '⚠️ Xabarda havola borligi sababli admin tekshiruviga yuborildi.',
+            'WORDLIST' => '⚠️ Xabarda taqiqlangan so\'zlar borligi sababli admin tekshiruviga yuborildi.',
+            default => '⚠️ Xabaringiz admin tekshiruviga yuborildi.',
         };
 
         $queuedExtra = [
@@ -469,7 +484,7 @@ final class Bot
             $this->telegram->sendMessage($chatId, $queuedText, $queuedExtra);
         }
 
-        Helpers::log('INFO', 'submission queued for moderation', ['type' => $content['type']]);
+        Helpers::log('INFO', 'submission queued for moderation', ['type' => $content['type'], 'category' => $category]);
     }
 
     private function handleCallback(array $callback): void
@@ -498,6 +513,26 @@ final class Bot
 
         if (str_starts_with($data, 'delw:') || str_starts_with($data, 'delp:') || str_starts_with($data, 'del:')) {
             $this->deleteOwnPost($callback);
+            return;
+        }
+
+        if (str_starts_with($data, 'modword:')) {
+            $this->handleAdminWordToggleCallback($callback);
+            return;
+        }
+
+        if (str_starts_with($data, 'modsave:')) {
+            $this->handleAdminWordSaveCallback($callback);
+            return;
+        }
+
+        if (str_starts_with($data, 'moddel:')) {
+            $this->handleAdminWordDeleteOnlyCallback($callback);
+            return;
+        }
+
+        if (str_starts_with($data, 'modcancel:')) {
+            $this->handleAdminWordCancelCallback($callback);
             return;
         }
 
@@ -575,6 +610,22 @@ final class Bot
         }
 
         $channelMessageId = (int) ($publish['result']['message_id'] ?? 0);
+        if ($channelMessageId > 0 && ($meta['target'] ?? 'post') === 'post') {
+            $postContent = (string) ($meta['content'] ?? '');
+            $this->savePublishedPost($channelMessageId, $postContent);
+            if (($this->config['bot_username'] ?? '') !== '') {
+                $botUser = $this->config['bot_username'];
+                $this->telegram->editReplyMarkup(
+                    $this->config['channel_id'],
+                    $channelMessageId,
+                    [
+                        'inline_keyboard' => [[
+                            ['text' => '🗑 O\'chirish / Taqiq', 'url' => "https://t.me/{$botUser}?start=mod_{$channelMessageId}"]
+                        ]]
+                    ]
+                );
+            }
+        }
         $meta['status'] = 'PUBLISHED';
         $this->updateModerationMessage($message, $meta, false);
         $this->notifyOwnerPublished($meta, $channelMessageId);
@@ -1521,5 +1572,383 @@ final class Bot
         }
 
         return false;
+    }
+
+    private function hasLinks(array $message, string $text): bool
+    {
+        $entities = array_merge($message['entities'] ?? [], $message['caption_entities'] ?? []);
+        foreach ($entities as $entity) {
+            $type = (string) ($entity['type'] ?? '');
+            if (in_array($type, ['url', 'text_link', 'mention', 'email', 'phone_number'], true)) {
+                return true;
+            }
+        }
+
+        if ($text !== '') {
+            if (preg_match('~(https?://|t\.me/|telegram\.me/|www\.|@[\w_]+)~iu', $text) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isMedia(array $content, array $message): bool
+    {
+        if (($content['type'] ?? 'text') !== 'text') {
+            return true;
+        }
+
+        foreach (['photo', 'video', 'animation', 'document', 'sticker', 'voice', 'audio', 'video_note', 'contact', 'location', 'venue'] as $key) {
+            if (isset($message[$key])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function startAdminChannelModeration(string $chatId, string $fromId, string $arg): void
+    {
+        if (!$this->isAdmin($fromId)) {
+            $this->telegram->sendMessage($chatId, '⛔ Ushbu bo\'lim faqat adminlar uchun.');
+            return;
+        }
+
+        $channelMsgId = (int) $arg;
+        if ($channelMsgId <= 0) {
+            $this->telegram->sendMessage($chatId, '❌ Noto\'g\'ri post ID.');
+            return;
+        }
+
+        $postText = $this->getPublishedPost($channelMsgId);
+        if ($postText === null || trim($postText) === '') {
+            $this->telegram->sendMessage($chatId, "⚠️ <b>Post #{$channelMsgId} topilmadi</b> yoki allaqachon o'chirilgan.");
+            return;
+        }
+
+        $words = $this->wordlist->candidates($postText, 30);
+        if (empty($words)) {
+            $this->telegram->sendMessage($chatId, "📌 <b>Post matni:</b>\n<i>\"" . htmlspecialchars($postText, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . "\"</i>\n\n⚠️ Matnda ajratib bo'ladigan so'zlar topilmadi.");
+            return;
+        }
+
+        $session = [
+            'msg_id' => $channelMsgId,
+            'post_text' => $postText,
+            'words' => $words,
+            'selected' => [],
+        ];
+        $this->saveAdminSession($fromId, $session);
+
+        $safeText = htmlspecialchars($postText, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $msg = "📌 <b>Kanaldagi post:</b>\n<i>\"{$safeText}\"</i>\n\nQaysi so'zlarni xavfli/taqiqlangan deb belgilamoqchisiz? Kerakli so'zlarni tanlab, <b>Saqlash</b> tugmasini bosing:";
+
+        $this->telegram->sendMessage($chatId, $msg, [
+            'reply_markup' => $this->renderWordSelectorKeyboard($channelMsgId, $words, [])
+        ]);
+    }
+
+    private function renderWordSelectorKeyboard(int $channelMsgId, array $words, array $selected): array
+    {
+        $rows = [];
+        $row = [];
+
+        foreach ($words as $idx => $word) {
+            $isSelected = in_array($word, $selected, true);
+            $icon = $isSelected ? '✅ ' : '◻️ ';
+            $row[] = [
+                'text' => $icon . $word,
+                'callback_data' => 'modword:' . $idx,
+            ];
+            if (count($row) === 2) {
+                $rows[] = $row;
+                $row = [];
+            }
+        }
+        if ($row !== []) {
+            $rows[] = $row;
+        }
+
+        $cnt = count($selected);
+        $saveBtnText = $cnt > 0 ? "💾 Saqlash ({$cnt} so'z) & O'chirish" : "💾 Saqlash & O'chirish";
+
+        $rows[] = [[
+            'text' => $saveBtnText,
+            'callback_data' => 'modsave:' . $channelMsgId,
+        ]];
+        $rows[] = [
+            ['text' => '🗑 Faqat O\'chirish', 'callback_data' => 'moddel:' . $channelMsgId],
+            ['text' => '❌ Bekor qilish', 'callback_data' => 'modcancel:' . $channelMsgId],
+        ];
+
+        return ['inline_keyboard' => $rows];
+    }
+
+    private function handleAdminWordToggleCallback(array $callback): void
+    {
+        $id = (string) ($callback['id'] ?? '');
+        $fromId = (string) ($callback['from']['id'] ?? '');
+        $data = (string) ($callback['data'] ?? '');
+        $messageId = (int) ($callback['message']['message_id'] ?? 0);
+        $chatId = (string) ($callback['message']['chat']['id'] ?? $fromId);
+
+        if (!$this->isAdmin($fromId)) {
+            $this->telegram->answerCallback($id, '⛔ Siz admin emassiz.', true);
+            return;
+        }
+
+        $idx = (int) substr($data, 8);
+        $session = $this->getAdminSession($fromId);
+        if (!is_array($session) || !isset($session['words'][$idx])) {
+            $this->telegram->answerCallback($id, 'Sessiya topilmadi yoki muddati o\'tgan.', true);
+            return;
+        }
+
+        $word = $session['words'][$idx];
+        $selected = $session['selected'] ?? [];
+        $pos = array_search($word, $selected, true);
+        if ($pos !== false) {
+            unset($selected[$pos]);
+            $selected = array_values($selected);
+            $alertText = "O'chirildi: {$word}";
+        } else {
+            $selected[] = $word;
+            $alertText = "Tanlandi: {$word}";
+        }
+
+        $session['selected'] = $selected;
+        $this->saveAdminSession($fromId, $session);
+
+        $this->telegram->editReplyMarkup(
+            $chatId,
+            $messageId,
+            $this->renderWordSelectorKeyboard($session['msg_id'], $session['words'], $session['selected'])
+        );
+        $this->telegram->answerCallback($id, $alertText);
+    }
+
+    private function handleAdminWordSaveCallback(array $callback): void
+    {
+        $id = (string) ($callback['id'] ?? '');
+        $fromId = (string) ($callback['from']['id'] ?? '');
+        $data = (string) ($callback['data'] ?? '');
+        $messageId = (int) ($callback['message']['message_id'] ?? 0);
+        $chatId = (string) ($callback['message']['chat']['id'] ?? $fromId);
+
+        if (!$this->isAdmin($fromId)) {
+            $this->telegram->answerCallback($id, '⛔ Siz admin emassiz.', true);
+            return;
+        }
+
+        $channelMsgId = (int) substr($data, 8);
+        $session = $this->getAdminSession($fromId);
+        $selected = is_array($session) ? ($session['selected'] ?? []) : [];
+
+        foreach ($selected as $w) {
+            $this->wordlist->add($w);
+        }
+
+        if ($channelMsgId > 0) {
+            $this->telegram->deleteMessage($this->config['channel_id'], $channelMsgId);
+            $this->deletePublishedPost($channelMsgId);
+        }
+        $this->deleteAdminSession($fromId);
+
+        $this->telegram->answerCallback($id, 'Bajarildi!');
+
+        if (!empty($selected)) {
+            $safeList = implode(', ', array_map(
+                static fn (string $w): string => '<b>' . htmlspecialchars($w, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b>',
+                $selected
+            ));
+            $text = "✅ Tanlangan so'zlar ({$safeList}) taqiqlangan so'zlar ro'yxatiga qo'shildi va post kanaldan o'chirildi!";
+        } else {
+            $text = "🗑 Post kanaldan o'chirildi (hech qanday so'z taqiqlanmadi).";
+        }
+
+        $this->telegram->editMessageText($chatId, $messageId, $text);
+    }
+
+    private function handleAdminWordDeleteOnlyCallback(array $callback): void
+    {
+        $id = (string) ($callback['id'] ?? '');
+        $fromId = (string) ($callback['from']['id'] ?? '');
+        $data = (string) ($callback['data'] ?? '');
+        $messageId = (int) ($callback['message']['message_id'] ?? 0);
+        $chatId = (string) ($callback['message']['chat']['id'] ?? $fromId);
+
+        if (!$this->isAdmin($fromId)) {
+            $this->telegram->answerCallback($id, '⛔ Siz admin emassiz.', true);
+            return;
+        }
+
+        $channelMsgId = (int) substr($data, 7);
+        if ($channelMsgId > 0) {
+            $this->telegram->deleteMessage($this->config['channel_id'], $channelMsgId);
+            $this->deletePublishedPost($channelMsgId);
+        }
+        $this->deleteAdminSession($fromId);
+
+        $this->telegram->answerCallback($id, 'Post o\'chirildi');
+        $this->telegram->editMessageText($chatId, $messageId, "🗑 Post kanaldan o'chirildi.");
+    }
+
+    private function handleAdminWordCancelCallback(array $callback): void
+    {
+        $id = (string) ($callback['id'] ?? '');
+        $fromId = (string) ($callback['from']['id'] ?? '');
+        $messageId = (int) ($callback['message']['message_id'] ?? 0);
+        $chatId = (string) ($callback['message']['chat']['id'] ?? $fromId);
+
+        if (!$this->isAdmin($fromId)) {
+            $this->telegram->answerCallback($id, '⛔ Siz admin emassiz.', true);
+            return;
+        }
+
+        $this->deleteAdminSession($fromId);
+        $this->telegram->answerCallback($id, 'Bekor qilindi');
+        $this->telegram->editMessageText($chatId, $messageId, 'Amal bekor qilindi.');
+    }
+
+    private function savePublishedPost(int $messageId, string $text): void
+    {
+        if ($messageId <= 0 || trim($text) === '') {
+            return;
+        }
+        $file = dirname(__DIR__) . '/data/published_posts.json';
+        $posts = [];
+        if (is_file($file)) {
+            $raw = @file_get_contents($file);
+            if ($raw !== false && $raw !== '') {
+                $data = json_decode($raw, true);
+                if (is_array($data)) {
+                    $posts = $data;
+                }
+            }
+        }
+        $posts[(string) $messageId] = [
+            'text' => $text,
+            'time' => time(),
+        ];
+        if (count($posts) > 500) {
+            asort($posts);
+            $posts = array_slice($posts, -300, null, true);
+        }
+        $dir = dirname($file);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+        $json = json_encode($posts, JSON_UNESCAPED_UNICODE);
+        $tmpFile = $file . '.tmp.' . bin2hex(random_bytes(4));
+        if (@file_put_contents($tmpFile, $json, LOCK_EX) !== false) {
+            @rename($tmpFile, $file);
+        }
+    }
+
+    private function getPublishedPost(int $messageId): ?string
+    {
+        if ($messageId <= 0) {
+            return null;
+        }
+        $file = dirname(__DIR__) . '/data/published_posts.json';
+        if (!is_file($file)) {
+            return null;
+        }
+        $raw = @file_get_contents($file);
+        if ($raw === false || $raw === '') {
+            return null;
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            return null;
+        }
+        return $data[(string) $messageId]['text'] ?? null;
+    }
+
+    private function deletePublishedPost(int $messageId): void
+    {
+        $file = dirname(__DIR__) . '/data/published_posts.json';
+        if (!is_file($file)) {
+            return;
+        }
+        $raw = @file_get_contents($file);
+        if ($raw === false || $raw === '') {
+            return;
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data) || !isset($data[(string) $messageId])) {
+            return;
+        }
+        unset($data[(string) $messageId]);
+        $json = json_encode($data, JSON_UNESCAPED_UNICODE);
+        $tmpFile = $file . '.tmp.' . bin2hex(random_bytes(4));
+        if (@file_put_contents($tmpFile, $json, LOCK_EX) !== false) {
+            @rename($tmpFile, $file);
+        }
+    }
+
+    private function saveAdminSession(string $adminId, array $session): void
+    {
+        $file = dirname(__DIR__) . '/data/admin_sessions.json';
+        $sessions = [];
+        if (is_file($file)) {
+            $raw = @file_get_contents($file);
+            if ($raw !== false && $raw !== '') {
+                $data = json_decode($raw, true);
+                if (is_array($data)) {
+                    $sessions = $data;
+                }
+            }
+        }
+        $sessions[$adminId] = $session;
+        $dir = dirname($file);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+        $json = json_encode($sessions, JSON_UNESCAPED_UNICODE);
+        $tmpFile = $file . '.tmp.' . bin2hex(random_bytes(4));
+        if (@file_put_contents($tmpFile, $json, LOCK_EX) !== false) {
+            @rename($tmpFile, $file);
+        }
+    }
+
+    private function getAdminSession(string $adminId): ?array
+    {
+        $file = dirname(__DIR__) . '/data/admin_sessions.json';
+        if (!is_file($file)) {
+            return null;
+        }
+        $raw = @file_get_contents($file);
+        if ($raw === false || $raw === '') {
+            return null;
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            return null;
+        }
+        return $data[$adminId] ?? null;
+    }
+
+    private function deleteAdminSession(string $adminId): void
+    {
+        $file = dirname(__DIR__) . '/data/admin_sessions.json';
+        if (!is_file($file)) {
+            return;
+        }
+        $raw = @file_get_contents($file);
+        if ($raw === false || $raw === '') {
+            return;
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data) || !isset($data[$adminId])) {
+            return;
+        }
+        unset($data[$adminId]);
+        $json = json_encode($data, JSON_UNESCAPED_UNICODE);
+        $tmpFile = $file . '.tmp.' . bin2hex(random_bytes(4));
+        if (@file_put_contents($tmpFile, $json, LOCK_EX) !== false) {
+            @rename($tmpFile, $file);
+        }
     }
 }
