@@ -230,15 +230,21 @@ final class Bot
         $token = Helpers::hmacToken(['thread' => $discMessageId], $this->config['app_secret'], 2592000);
         $url = 'https://t.me/' . $this->config['bot_username'] . '?start=comment_' . $token;
 
+        $channelMsgId = $this->resolveChannelMessageId($message);
+        $modUrl = 'https://t.me/' . $this->config['bot_username'] . '?start=mod_' . $channelMsgId;
+
         $this->telegram->sendMessage(
             $this->config['discussion_group_id'],
             '💬 <b>Ushbu postga anonim izoh qoldirish uchun quyidagi tugmani bosing:</b>',
             [
                 'reply_to_message_id' => $discMessageId,
                 'reply_markup' => [
-                    'inline_keyboard' => [[
-                        ['text' => '✍️ Anonim izoh yozish', 'url' => $url]
-                    ]]
+                    'inline_keyboard' => [
+                        [
+                            ['text' => '✍️ Anonim izoh yozish', 'url' => $url],
+                            ['text' => '🗑 O\'chirish / Taqiq', 'url' => $modUrl],
+                        ]
+                    ]
                 ]
             ]
         );
@@ -1594,6 +1600,19 @@ final class Bot
         }
 
         return false;
+    }
+
+    private function resolveChannelMessageId(array $message): int
+    {
+        if (isset($message['forward_from_message_id']) && (int) $message['forward_from_message_id'] > 0) {
+            return (int) $message['forward_from_message_id'];
+        }
+
+        if (isset($message['forward_origin']['message_id']) && (int) $message['forward_origin']['message_id'] > 0) {
+            return (int) $message['forward_origin']['message_id'];
+        }
+
+        return (int) ($message['message_id'] ?? 0);
     }
 
     private function hasLinks(array $message, string $text): bool
