@@ -65,8 +65,11 @@ final class Bot
         $chatId = (string) ($message['chat']['id'] ?? '');
         $text = trim((string) ($message['text'] ?? ''));
 
-        if (str_starts_with($text, '/start')) {
-            $arg = trim(substr($text, 6));
+        $firstWord = strtolower(explode(' ', $text)[0] ?? '');
+        $cmd = explode('@', $firstWord)[0];
+
+        if ($cmd === '/start') {
+            $arg = trim(substr($text, strlen($firstWord)));
             if (str_starts_with($arg, 'comment_')) {
                 $this->startComment($chatId, substr($arg, 8));
                 return;
@@ -92,7 +95,7 @@ final class Bot
             return;
         }
 
-        if (str_starts_with($text, '/admin')) {
+        if ($cmd === '/admin') {
             if (!$this->isAdmin((string) ($message['from']['id'] ?? ''))) {
                 $this->telegram->sendMessage($chatId, '⛔ Bu bo\'lim faqat adminlar uchun.');
                 return;
@@ -157,17 +160,17 @@ final class Bot
             return;
         }
 
-        if ($text === '/rules' || $text === '📜 Qoidalar') {
+        if ($cmd === '/rules' || $text === '📜 Qoidalar') {
             $this->sendRules($chatId);
             return;
         }
 
-        if ($text === '/stop' || $text === '/cancel' || $text === '🛑 To\'xtatish') {
+        if ($cmd === '/stop' || $cmd === '/cancel' || $text === '🛑 To\'xtatish') {
             $this->stopAndReset($chatId, (string) ($message['from']['id'] ?? ''));
             return;
         }
 
-        if ($text === '/help' || $text === '❓ Yordam') {
+        if ($cmd === '/help' || $text === '❓ Yordam') {
             $this->sendHelp($chatId);
             return;
         }
