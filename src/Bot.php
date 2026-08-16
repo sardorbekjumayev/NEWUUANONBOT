@@ -233,31 +233,31 @@ final class Bot
         $channelMsgId = $this->resolveChannelMessageId($message);
         $modUrl = 'https://t.me/' . $this->config['bot_username'] . '?start=mod_' . $channelMsgId;
 
-        // 1. Send public comment prompt message for all users
-        $commentMsg = $this->telegram->sendMessage(
+        // 1. First reply message: Admin management & word banning (for admins)
+        $adminMsg = $this->telegram->sendMessage(
             $this->config['discussion_group_id'],
-            '💬 <b>Ushbu postga anonim izoh qoldirish uchun quyidagi tugmani bosing:</b>',
+            '⚙️ <b>Adminlar uchun boshqaruv (O\'chirish & Taqiq):</b>',
             [
                 'reply_to_message_id' => $discMessageId,
                 'reply_markup' => [
                     'inline_keyboard' => [[
-                        ['text' => '✍️ Anonim izoh yozish', 'url' => $url]
+                        ['text' => '🗑 O\'chirish / Taqiq', 'url' => $modUrl]
                     ]]
                 ]
             ]
         );
 
-        $commentMsgId = (int) ($commentMsg['result']['message_id'] ?? 0);
+        $adminMsgId = (int) ($adminMsg['result']['message_id'] ?? 0);
 
-        // 2. Send separate reply message for Admin management & word banning
+        // 2. Second reply message: Public comment prompt (for all users)
         $this->telegram->sendMessage(
             $this->config['discussion_group_id'],
-            '⚙️ <b>Adminlar uchun boshqaruv (O\'chirish & Taqiq):</b>',
+            '💬 <b>Ushbu postga anonim izoh qoldirish uchun quyidagi tugmani bosing:</b>',
             [
-                'reply_to_message_id' => $commentMsgId > 0 ? $commentMsgId : $discMessageId,
+                'reply_to_message_id' => $adminMsgId > 0 ? $adminMsgId : $discMessageId,
                 'reply_markup' => [
                     'inline_keyboard' => [[
-                        ['text' => '🗑 O\'chirish / Taqiq', 'url' => $modUrl]
+                        ['text' => '✍️ Anonim izoh yozish', 'url' => $url]
                     ]]
                 ]
             ]
@@ -973,82 +973,97 @@ final class Bot
 
     private function formatModeration(array $meta): string
     {
-        $statusIcon = match ($meta['status'] ?? 'WAITING') {
-            'PUBLISHED' => '🟢 Published',
-            'REJECTED' => '🔴 Rejected',
-            default => '🟡 Waiting',
-        };
-        $aiLine = !empty($meta['unavailable'])
-            ? "⚠️ AI unavailable\nManual review required"
-            : (!empty($meta['local_wordlist'])
-                ? '🚫 Wordlist: MATCH'
-            : match ($meta['ai'] ?? 'REVIEW') {
-                'ALLOW' => '🤖 AI: SAFE',
-                'REJECT' => '🔴 AI suggested rejection',
-                default => '⚠️ AI: REVIEW',
-            });
         $content = trim((string) ($meta['content'] ?? ''));
-        $matchedWords = implode(', ', array_map(
-            static fn (string $word): string => htmlspecialchars($word, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
-            (array) ($meta['matched_words'] ?? [])
-        ));
-
-        return "🆕 Anonymous Submission\n\n"
-            . ($content === '' ? '[media only]' : htmlspecialchars($content, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'))
-            . "\n\n{$aiLine}\nCategory: " . htmlspecialchars((string) ($meta['category'] ?? 'OTHER'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
-            . "\nStatus: {$statusIcon}"
-            . "\n\nRef: " . htmlspecialchars((string) ($meta['owner'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
-            . "\nType: " . htmlspecialchars((string) ($meta['type'] ?? 'text'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
-            . "\nTarget: " . htmlspecialchars((string) ($meta['target'] ?? 'post'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
-            . "\nThread: " . (int) ($meta['thread'] ?? 0)
-            . "\nMedia: " . (int) ($meta['media_message'] ?? 0)
-            . "\nMatches: " . $matchedWords;
+        return htmlspecialchars($content, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     private function readMeta(array $message): array
     {
+        $messageId = (int) ($message['message_id'] ?? 0);
+        $stored = $this->getModerationMeta($messageId);
+        if (is_array($stored)) {
+            return $stored;
+        }
+
         $text = (string) ($message['text'] ?? $message['caption'] ?? '');
-        preg_match('~Status:\s*(.+)~u', $text, $status);
         preg_match('~Ref:\s*([A-Za-z0-9_-]+)~', $text, $owner);
         preg_match('~Type:\s*(\w+)~', $text, $type);
         preg_match('~Target:\s*(\w+)~', $text, $target);
         preg_match('~Thread:\s*(\d+)~', $text, $thread);
-        preg_match('~Media:\s*(\d+)~', $text, $media);
-        preg_match('~Matches:\s*(.*)~u', $text, $matches);
-
-        $contentBlock = trim((string) preg_replace('~^🆕 Anonymous Submission\s*|\n\n(?:🤖|⚠️|🔴).*~us', '', $text));
-        $contentBlock = $contentBlock === '[media only]' ? '' : html_entity_decode($contentBlock, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-        $matchedWords = array_values(array_filter(array_map(
-            static fn (string $word): string => trim(html_entity_decode($word, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')),
-            explode(',', (string) ($matches[1] ?? ''))
-        )));
 
         return [
-            'status' => str_contains($status[1] ?? '', 'Published') ? 'PUBLISHED' : (str_contains($status[1] ?? '', 'Rejected') ? 'REJECTED' : 'WAITING'),
+            'status' => 'WAITING',
             'owner' => $owner[1] ?? '',
             'type' => $type[1] ?? 'text',
             'target' => $target[1] ?? 'post',
             'thread' => (int) ($thread[1] ?? 0),
-            'media_message' => (int) ($media[1] ?? 0),
-            'content' => $contentBlock,
+            'media_message' => 0,
+            'content' => $text,
             'ai' => 'REVIEW',
             'category' => 'OTHER',
-            'local_wordlist' => str_contains($text, 'Wordlist: MATCH'),
-            'matched_words' => $matchedWords,
+            'local_wordlist' => false,
+            'matched_words' => [],
         ];
     }
 
     private function updateModerationMessage(array $message, array $meta, bool $withKeyboard = true): void
     {
         $messageId = (int) ($message['message_id'] ?? 0);
+        $this->saveModerationMeta($messageId, $meta);
         $markup = $withKeyboard ? $this->adminKeyboard($messageId) : ['inline_keyboard' => []];
-        $text = $this->formatModeration($meta);
+        $this->telegram->editReplyMarkup($this->config['moderation_group_id'], $messageId, $markup);
+    }
 
-        if (isset($message['text'])) {
-            $this->telegram->editMessageText($this->config['moderation_group_id'], $messageId, $text, ['reply_markup' => $markup]);
-        } else {
-            $this->telegram->editMessageCaption($this->config['moderation_group_id'], $messageId, $text, ['reply_markup' => $markup]);
+    private function saveModerationMeta(int $messageId, array $meta): void
+    {
+        if ($messageId <= 0) {
+            return;
         }
+        $file = dirname(__DIR__) . '/data/moderation_meta.json';
+        $store = [];
+        if (is_file($file)) {
+            $raw = @file_get_contents($file);
+            if ($raw !== false && $raw !== '') {
+                $data = json_decode($raw, true);
+                if (is_array($data)) {
+                    $store = $data;
+                }
+            }
+        }
+        $store[(string) $messageId] = $meta;
+        if (count($store) > 500) {
+            asort($store);
+            $store = array_slice($store, -300, null, true);
+        }
+        $dir = dirname($file);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+        $json = json_encode($store, JSON_UNESCAPED_UNICODE);
+        $tmpFile = $file . '.tmp.' . bin2hex(random_bytes(4));
+        if (@file_put_contents($tmpFile, $json) !== false) {
+            @rename($tmpFile, $file);
+        }
+    }
+
+    private function getModerationMeta(int $messageId): ?array
+    {
+        if ($messageId <= 0) {
+            return null;
+        }
+        $file = dirname(__DIR__) . '/data/moderation_meta.json';
+        if (!is_file($file)) {
+            return null;
+        }
+        $raw = @file_get_contents($file);
+        if ($raw === false || $raw === '') {
+            return null;
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            return null;
+        }
+        return $data[(string) $messageId] ?? null;
     }
 
     private function adminKeyboard(int $messageId): array
@@ -1412,12 +1427,20 @@ final class Bot
     private function adminMainKeyboard(): array
     {
         $webhookUrl = (string) ($this->config['webhook_url'] ?? '');
+        if ($webhookUrl === '' && !empty($_SERVER['HTTP_HOST'])) {
+            $host = $_SERVER['HTTP_HOST'];
+            $uri = parse_url($_SERVER['REQUEST_URI'] ?? '/NEWUUANONBOT/index.php', PHP_URL_PATH) ?: '/NEWUUANONBOT/index.php';
+            $webhookUrl = 'https://' . trim($host, '/') . '/' . ltrim($uri, '/');
+        }
+        if ($webhookUrl === '') {
+            $webhookUrl = 'https://c869.coresuz.ru/NEWUUANONBOT/index.php';
+        }
         if (str_starts_with($webhookUrl, 'http://')) {
             $webhookUrl = 'https://' . substr($webhookUrl, 7);
         }
         $webAppUrl = str_contains($webhookUrl, 'index.php') 
             ? rtrim($webhookUrl, '/') . '?app=admin'
-            : rtrim($webhookUrl, '/') . '/admin';
+            : rtrim(rtrim($webhookUrl, '/'), 'index.php') . '/index.php?app=admin';
 
         return ['inline_keyboard' => [
             [

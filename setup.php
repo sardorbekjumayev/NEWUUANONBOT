@@ -15,10 +15,14 @@ if (($config['bot_token'] ?? '') === '') {
     exit(1);
 }
 
-if (($config['webhook_url'] ?? '') === '') {
-    echo "WEBHOOK_URL is empty. Example: https://example.com/index.php\n";
-    exit(1);
+$webhookUrl = trim((string) ($argv[1] ?? $config['webhook_url'] ?? ''));
+if ($webhookUrl === '') {
+    $webhookUrl = 'https://c869.coresuz.ru/NEWUUANONBOT/index.php';
 }
+if (str_starts_with($webhookUrl, 'http://')) {
+    $webhookUrl = 'https://' . substr($webhookUrl, 7);
+}
+echo "🔗 Webhook URL: {$webhookUrl}\n";
 
 // 1. Clear local cache and deduplication state
 $dataDir = __DIR__ . '/data';
@@ -39,7 +43,7 @@ if (is_dir($dataDir)) {
 // 2. Configure Telegram Webhook and drop stuck pending updates
 $telegram = new Telegram($config['bot_token']);
 $result = $telegram->call('setWebhook', array_filter([
-    'url' => $config['webhook_url'],
+    'url' => $webhookUrl,
     'secret_token' => $config['webhook_secret'] ?: null,
     'allowed_updates' => ['message', 'callback_query'],
     'drop_pending_updates' => true,
@@ -51,5 +55,5 @@ if (($result['ok'] ?? false) !== true) {
 }
 
 echo "✅ Webhook configured successfully (pending updates cleared).\n";
-echo "🔗 Health check: " . rtrim((string) $config['webhook_url'], '/') . "?health=1\n";
+echo "🔗 Health check: " . rtrim($webhookUrl, '/') . "?health=1\n";
 
